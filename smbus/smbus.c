@@ -173,6 +173,20 @@ int smbus_deinit( void )
 }
 
 /**
+ * @brief This function updates bInvalidPec variable in static SMBUS_TEST_CTRL struct
+ */
+void smbus_inject_invalid_pec( bool bInvalidPec )
+{
+}
+
+/**
+ * @brief This function updates xInvalidBlockSize variable in static SMBUS_TEST_CTRL struct
+ */
+void smbus_inject_invalid_block_size( SMBUS_INJECT_BLOCK_SIZE_ERROR xInvalidBlockSize )
+{
+}
+
+/**
  * @brief Call SMBus command "Send byte"
  */
 int smbus_send_byte( uint8_t ucAddr, uint8_t ucData, bool bPec )
@@ -296,4 +310,180 @@ int smbus_read_word( uint8_t ucAddr, uint8_t ucCmd, uint16_t* pusData, bool bPec
     }
     
     return iStatus;
+}
+
+/**
+ * @brief Call SMBus command "Write 32"
+ */
+int smbus_write_32( uint8_t ucAddr, uint8_t ucCmd, uint32_t ulData, bool bPec )
+{
+    OPERATION_NOT_SUPPORTED;
+}
+
+/**
+ * @brief Call SMBus command "Read 32"
+ */
+int smbus_read_32( uint8_t ucAddr, uint8_t ucCmd, uint32_t* pulData, bool bPec )
+{
+    OPERATION_NOT_SUPPORTED;
+}
+
+/**
+ * @brief Call SMBus command "Write 64"
+ */
+int smbus_write_64( uint8_t ucAddr, uint8_t ucCmd, uint64_t ullData, bool bPec )
+{
+    OPERATION_NOT_SUPPORTED;
+}
+
+/**
+ * @brief Call SMBus command "Read 64"
+ */
+int smbus_read_64( uint8_t ucAddr, uint8_t ucCmd, uint64_t* pullData, bool bPec )
+{
+    OPERATION_NOT_SUPPORTED;
+}
+
+/**
+ * @brief Call SMBus command "Block write"
+ */
+int smbus_block_write( uint8_t ucAddr, uint8_t ucCmd, uint8_t* pucData, uint8_t ucLength, bool bPec )
+{
+    int iStatus = SMBUS_STATUS_ERROR;
+
+    if( ( LINUX_STATUS_INVALID_HANDLE != iBusHandle ) &&
+        ( NULL != pucData ) && ( SMBUS_MAX_DATA >= ucLength ) &&
+        ( SMBUS_STATUS_OK == iClaimSlave( ucAddr, bPec ) ) )
+    {
+        if( LINUX_STATUS_RW_OK == i2c_smbus_write_block_data( iBusHandle, ucCmd, ucLength, pucData ) )
+        {
+            iStatus = SMBUS_STATUS_OK;
+        }
+    }
+
+    return iStatus;
+}
+
+/**
+ * @brief Call SMBus command "Block read"
+ */
+int smbus_block_read( uint8_t ucAddr, uint8_t ucCmd, uint8_t* pucData, uint8_t* pucLength, bool bPec )
+{
+    int iStatus = SMBUS_STATUS_ERROR;
+
+    if( ( LINUX_STATUS_INVALID_HANDLE != iBusHandle ) && 
+        ( NULL != pucData ) && ( NULL != pucLength ) &&
+        ( SMBUS_STATUS_OK == iClaimSlave( ucAddr, bPec ) ) )
+    {
+        int iBytesRead = i2c_smbus_read_block_data( iBusHandle, ucCmd, pucData );
+
+        if( LINUX_STATUS_RW_ERROR != iBytesRead )
+        {
+            *pucLength = ( uint8_t )iBytesRead;
+            iStatus = SMBUS_STATUS_OK;
+        }
+        else
+        {
+            *pucLength = 0;
+        }
+    }
+
+    return iStatus;
+}
+
+/**
+ * @brief Call SMBus command "Process call"
+ */
+int smbus_process_call( uint8_t ucAddr, uint8_t ucCmd, uint16_t usWrData, uint16_t* pusRdData, bool bPec )
+{
+    int iStatus = SMBUS_STATUS_ERROR;
+
+    if( ( LINUX_STATUS_INVALID_HANDLE != iBusHandle ) && 
+        ( NULL != pusRdData ) &&
+        ( SMBUS_STATUS_OK == iClaimSlave( ucAddr, bPec ) ) )
+    {
+        int iTempWord = i2c_smbus_process_call( iBusHandle, ucCmd, usWrData );
+
+        if( LINUX_STATUS_RW_ERROR != iTempWord )
+        {
+            *pusRdData = ( uint16_t )iTempWord;
+            iStatus = SMBUS_STATUS_OK;
+        }
+    }
+
+    return iStatus;
+}
+
+/**
+ * @brief Call SMBus command "Block Write/Read Process call"
+ */
+int smbus_block_process_call( uint8_t ucAddr, uint8_t ucCmd,
+                              uint8_t* pucWrData, uint8_t ucWrLen,
+                              uint8_t* pucRdData, uint8_t* pucRdLen,
+                              bool bPec )
+{
+    int iStatus = SMBUS_STATUS_ERROR;
+
+    if( ( LINUX_STATUS_INVALID_HANDLE != iBusHandle ) && 
+        ( NULL != pucWrData ) && ( NULL != pucRdData ) &&
+        ( NULL != pucRdLen ) && ( SMBUS_MAX_DATA >= ucWrLen ) &&
+        ( SMBUS_STATUS_OK == iClaimSlave( ucAddr, bPec ) ) )
+    {
+        /* Create a temp buffer so we don't override `pucWrData`. */
+        uint8_t pucTempBuffer[ SMBUS_MAX_BUFFER ] = { 0 };
+        memcpy( pucTempBuffer, pucWrData, ucWrLen );
+
+        int iBytesRead = i2c_smbus_block_process_call( iBusHandle, ucCmd, ucWrLen, pucTempBuffer );
+
+        if( LINUX_STATUS_RW_ERROR != iBytesRead )
+        {
+            *pucRdLen = ( uint8_t )iBytesRead;
+            memcpy( pucRdData, pucTempBuffer, *pucRdLen );
+            iStatus = SMBUS_STATUS_OK;
+        }
+    }
+
+    return iStatus;
+}
+
+/*****************************************************************************/
+/* Public function implementations - Target                                  */
+/*****************************************************************************/
+
+/**
+ * @brief Enable an SMBus target at a fixed address
+ */
+int smbus_target_enable( uint8_t ucAddr )
+{
+    OPERATION_NOT_SUPPORTED;
+}
+
+/**
+ * @brief Disable the SMBus target
+ */
+int smbus_target_disable( void )
+{
+    OPERATION_NOT_SUPPORTED;
+}
+
+/**
+ * @brief Prepare data for target transmission
+ */
+int smbus_target_set_data( uint8_t* pucData,
+                           uint8_t ucLength,
+                           SMBUS_TARGET_PEC_INFO* pxPecInfo )
+{
+    OPERATION_NOT_SUPPORTED;
+}
+
+/**
+ * @brief Retrieve data sent to target
+ */
+int smbus_target_get_data( uint8_t* pucData,
+                           uint16_t* pusLength,
+                           SMBUS_TARGET_GET_DATA_FILTER eDataFilter,
+                           int iTimeoutMs,
+                           bool bPecExpected )
+{
+    OPERATION_NOT_SUPPORTED;
 }

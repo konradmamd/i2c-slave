@@ -1,7 +1,7 @@
 /**
  * @file test_slave.c
  * @author Konrad Mosoczy (konradm@amd.com)
- * @brief App to test I2C slave functionality on the OpenBMC
+ * @brief Application to test I2C slave functionality on OpenBMC/Linux
  * @date 2023-03-06
  * 
  * Copyright (c) 2023-present Advanced Micro Devices, Inc. All rights reserved.
@@ -18,37 +18,20 @@
 #include <stdint.h>
 #include <fcntl.h>
 #include <unistd.h>
-#include <time.h>
 #include <poll.h>
 #include <signal.h>
 #include <sys/ioctl.h>
 
+#include "test_utils.h"
 #include "i2c-slave-eeprom.h"
 
 /*****************************************************************************/
 /* Defines                                                                   */
 /*****************************************************************************/
 
-#define UNUSED( x )         ( void )( x )
-
 #define INVALID_FD          ( -1  )
 #define DEVICE_FILE         ( "/dev/i2c-slave-simple" )
 #define POLL_FOREVER        ( -1  )
-
-#define BUFFER_PRINT_WIDTH  ( 8 )
-#define SMBUS_PRINTF        { struct timespec T = { 0 }; clock_gettime( CLOCK_REALTIME, &T ); \
-                            struct tm *t = localtime( &T.tv_sec );                            \
-                            printf( "[ %02d:%02d:%02d:%03ld ] ",                              \
-                                ( t->tm_hour ),                                               \
-                                ( t->tm_min ),                                                \
-                                ( t->tm_sec ),                                                \
-                                ( T.tv_nsec/1000000 ) ); }                                    \
-                            printf
-
-#define PRINT_ENUM(x)      SMBUS_PRINTF( "%-40s: %d\r\n", #x, ( char )x )
-#define SMBUS_PRINTF_DBG   SMBUS_PRINTF( "%d - ", __LINE__ ); printf
-#define SMBUS_PRINTF_ERR   SMBUS_PRINTF_DBG( "ERROR - " ); printf
-#define NEW_LINE           printf( "\r\n" );
 
 /*****************************************************************************/
 /* Enums                                                                     */
@@ -83,27 +66,6 @@ static bool bStopPolling        = false;
 /*****************************************************************************/
 /* Function Declarations                                                     */
 /*****************************************************************************/
-
-/**
- * @brief Displays data buffer
- *
- * @param pucBuffer Buffer to display
- * @param usLength Number of bytes in buffer
- *
- * @return N/A
- */
-static void vDisplayBuffer( uint8_t *pucBuffer, uint16_t usLength );
-
-/**
- * @brief Read a byte from stdin
- *
- * @param sPrompt Prompt to display to user
- * @param bHex TRUE if expected input value is b16, otherwise it will be b10
- * @param bNewLine TRUE if a newline should ne printed after the prompt
- *
- * @return Single byte, read from stdin (0 is the default value if there are errors)
- */
-static uint8_t ucInputByte( const char *sPrompt, bool bHex, bool bNewLine );
 
 /**
  * @brief Displays user commands
@@ -176,77 +138,6 @@ static void vDisplayCommands( void )
     PRINT_ENUM( USER_CMD_GET_DATA );
     PRINT_ENUM( USER_CMD_POLL );
     NEW_LINE;
-}
-
-/**
- * @brief Read a byte from stdin
- */
-static uint8_t ucInputByte( const char *sPrompt, bool bHex, bool bNewLine )
-{
-    int iRet = 0;
-    uint8_t ucByte = 0;
-
-    if( NULL != sPrompt )
-    {
-        do
-        {
-            fflush( stdin );
-            printf( "%s (%s): ", sPrompt, ( true == bHex )?( "hex" ):( "dec" ) );
-            if( true == bNewLine )
-            {
-                printf( "\r\n" );
-            }
-            if( true == bHex )
-            {
-                iRet = scanf( " %hhx", &ucByte );
-                UNUSED( iRet );
-            }
-            else
-            {
-                iRet = scanf( " %hhd", &ucByte );
-                UNUSED( iRet );
-            }
-
-            fflush( stdin );
-        
-        } while( 0xFF < ucByte );
-    }
-
-    return ucByte;
-}
-
-/**
- * @brief Displays data buffer
- */
-static void vDisplayBuffer( uint8_t *pucBuffer, uint16_t usLength )
-{
-    if( NULL != pucBuffer )
-    {
-        int i = 0;
-
-        SMBUS_PRINTF( "Data:\r\n" );
-        for( i = 0; i < usLength; i++ )
-        {
-            if( 0 == ( i % BUFFER_PRINT_WIDTH ) )
-            {
-                if( 0 != i )
-                {
-                    printf( " [ %02X ]\r\n", i - 1 );
-                }
-                SMBUS_PRINTF( "\t[ %02X ] ", i );
-            }
-            printf( " %02X ", pucBuffer[ i ] );
-        }
-        for( i = i; ( 0 != ( i % BUFFER_PRINT_WIDTH ) ); i++ )
-        {
-            printf( " -- " );
-        }
-        printf( " [ %02X ]\r\n", i - 1 );
-    }
-    else
-    {
-        SMBUS_PRINTF_ERR( "Invalid data\r\n" );
-    }
 }
 
 /**
