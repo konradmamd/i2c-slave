@@ -16,6 +16,7 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <string.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <poll.h>
@@ -29,9 +30,20 @@
 /* Defines                                                                   */
 /*****************************************************************************/
 
-#define INVALID_FD          ( -1  )
-#define DEVICE_FILE         ( "/dev/i2c-slave-simple" )
-#define POLL_FOREVER        ( -1  )
+#define INVALID_FD            ( -1 )
+#define LINUX_ERROR           ( -1 )
+#define LINUX_OK              ( 0  )
+
+#define DEVICE_NAME           "i2c-slave-simple"
+#define DEVICE_FILE           "/dev/" DEVICE_NAME
+
+#define NEW_DEVICE            DEVICE_NAME " 0x10%02hhX"
+#define DEL_DEVICE            "0x10%02hhX"
+#define NEW_DEVICE_SYSFS_STR  "/sys/bus/i2c/devices/i2c-%d/new_device"
+#define DEL_DEVICE_SYSFS_STR  "/sys/bus/i2c/devices/i2c-%d/delete_device"
+#define DEVICE_SYSFS_STR_LEN  ( 50 )
+
+#define POLL_FOREVER          ( -1 )
 
 /*****************************************************************************/
 /* Enums                                                                     */
@@ -49,6 +61,9 @@ typedef enum USER_CMD
     USER_CMD_SET_DATA,
     USER_CMD_GET_DATA,
     USER_CMD_POLL,
+    USER_CMD_OPEN_DEVICE,
+    USER_CMD_NEW_DEVICE,
+    USER_CMD_DELETE_DEVICE,
 
     MAX_USER_CMD
 
@@ -62,6 +77,7 @@ static struct i2c_data  xTxData = { 0 };
 static struct i2c_event xRxData = { 0 };
 static bool bQuit               = false;
 static bool bStopPolling        = false;
+static int iDevice              = INVALID_FD;
 
 /*****************************************************************************/
 /* Function Declarations                                                     */
@@ -75,43 +91,62 @@ static bool bStopPolling        = false;
 static void vDisplayCommands( void );
 
 /**
- * @brief Poll the I2C slave for any events.
+ * @brief Open the i2c-slave-simple sysfs interface.
+ *
+ * @returns None
+ */
+static void vOpenDevice( void );
+
+/**
+ * @brief Add a new slave device on the specified bus via its sysfs interface.
  * 
- * @param iDevice File descriptor of the I2C slave device.
+ * @param iBusNum The bus number to use
+ * @param ucAddr Slave address
+ *
+ * @returns None
+ */
+static void vNewSlaveDevice( int iBusNum, uint8_t ucAddr );
+
+/**
+ * @brief Remove a slave device from the specified bus via its sysfs interface.
+ * 
+ * @param iBusNum The bus number to use
+ * @param ucAddr Slave address
+ *
+ * @returns None
+ */
+static void vDeleteSlaveDevice( int iBusNum, uint8_t ucAddr );
+
+/**
+ * @brief Poll the I2C slave for any events.
  * 
  * @returns None
  */
-static void vPollSlaveLoop( int iDevice );
+static void vPollSlaveLoop( void );
 
 /**
  * @brief Set the slave I2C response data.
  * 
- * @param iDevice File descriptor of the I2C slave device
- * 
  * @returns None
  */
-static void vSetSlaveData( int iDevice );
+static void vSetSlaveData( void );
 
 /**
  * @brief Get the slave I2C data written by a master. This does not check
  *   if a transaction was completed fully or if there even is any data. Also,
  *   the last_event on the driver side does not get cleared.
  * 
- * @param iDevice File descriptor of the I2C slave device
- * 
  * @returns None
  */
-static void vGetSlaveData( int iDevice );
+static void vGetSlaveData( void );
 
 /**
  * @brief Get the last event/events received by the I2C slave.
  * 
- * @param iDevice File descriptor of the I2C slave device
- * 
  * @returns None
  * 
  */
-static void vGetSlaveEvent( int iDevice );
+static void vGetSlaveEvent( void );
 
 /**
  * @brief Interrupt handler to stop polling when Ctrl-C is pressed.
@@ -137,7 +172,108 @@ static void vDisplayCommands( void )
     PRINT_ENUM( USER_CMD_SET_DATA );
     PRINT_ENUM( USER_CMD_GET_DATA );
     PRINT_ENUM( USER_CMD_POLL );
+    PRINT_ENUM( USER_CMD_OPEN_DEVICE );
+    PRINT_ENUM( USER_CMD_NEW_DEVICE );
+    PRINT_ENUM( USER_CMD_DELETE_DEVICE );
     NEW_LINE;
+}
+
+/**
+ * @brief Open the i2c slave sysfs interface.
+ */
+static void vOpenDevice( void )
+{
+    if( INVALID_FD == iDevice )
+    {
+        iDevice = open( DEVICE_FILE, O_RDWR | O_NONBLOCK );
+
+        if( INVALID_FD != iDevice )
+        {
+            SMBUS_PRINTF( "Opened %s sysfs interface\r\n", DEVICE_FILE );
+        }
+        else
+        {
+            SMBUS_PRINTF_ERR( "Coult not open %s sysfs interface\r\n", DEVICE_FILE );
+        }
+    }
+    else
+    {
+        SMBUS_PRINTF_ERR( "Device already open!\r\n" );
+    }
+}
+
+/**
+ * @brief Create a new slave device.
+ */
+static void vNewSlaveDevice( int iBusNum, uint8_t ucAddr )
+{
+    char pcNewDeviceSysfs[ DEVICE_SYSFS_STR_LEN ] = { 0 };
+    snprintf( pcNewDeviceSysfs, DEVICE_SYSFS_STR_LEN - 1, NEW_DEVICE_SYSFS_STR, iBusNum );
+
+    int iBusFd = open( pcNewDeviceSysfs, O_WRONLY );
+
+    if( INVALID_FD != iBusFd )
+    {
+        char pcNewDevice[ DEVICE_SYSFS_STR_LEN ] = { 0 };
+        snprintf( pcNewDevice, DEVICE_SYSFS_STR_LEN - 1, NEW_DEVICE, ucAddr );
+
+        /* eg: echo i2c-slave-simple 0x1064 > /sys/bus/i2c/devices/i2c-10/new_device */
+        if( LINUX_ERROR != write( iBusFd, &pcNewDevice, strlen( pcNewDevice ) ) )
+        {
+            SMBUS_PRINTF( "Created slave device on bus %d at address 0x%02hhX\r\n", iBusNum, ucAddr );
+        }
+        else
+        {
+            SMBUS_PRINTF_ERR( "Could not create slave device!\r\n" );
+        }
+
+        close( iBusFd );
+    }
+    else
+    {
+        SMBUS_PRINTF_ERR( "Could not open bus %d sysfs interface!\r\n", iBusNum );
+    }
+}
+
+/**
+ * @brief Remove an existing slave device.
+ */
+static void vDeleteSlaveDevice( int iBusNum, uint8_t ucAddr )
+{
+    char pcDelDeviceSysfs[ DEVICE_SYSFS_STR_LEN ] = { 0 };
+    snprintf( pcDelDeviceSysfs, DEVICE_SYSFS_STR_LEN - 1, DEL_DEVICE_SYSFS_STR, iBusNum );
+
+    int iBusFd = open( pcDelDeviceSysfs, O_WRONLY );
+
+    if( INVALID_FD != iBusFd )
+    {
+        char pcDelDevice[ DEVICE_SYSFS_STR_LEN ] = { 0 };
+        snprintf( pcDelDevice, DEVICE_SYSFS_STR_LEN - 1, DEL_DEVICE, ucAddr );
+
+        /* Close the current device before deleting. */
+        if( INVALID_FD != iDevice )
+        {
+            SMBUS_PRINTF( "Closing device file...\r\n" );
+            close( iDevice );
+            iDevice = INVALID_FD;
+        }
+
+        /* eg: echo i2c-slave-simple 0x1064 > /sys/bus/i2c/devices/i2c-10/new_device */
+        if( LINUX_ERROR != write( iBusFd, &pcDelDevice, strlen( pcDelDevice ) ) )
+        {
+            SMBUS_PRINTF( "Removed slave device on bus %d at address 0x%02hhX\r\n", iBusNum, ucAddr );
+        }
+        else
+        {
+            SMBUS_PRINTF_ERR( "Could not remove slave device!\r\n" );
+        }
+
+        close( iBusFd );
+    }
+    else
+    {
+        SMBUS_PRINTF_ERR( "Could not open bus %d sysfs interface!\r\n", iBusNum );
+    }
 }
 
 /**
@@ -163,7 +299,7 @@ static void vStopPolling( int iSig )
 /**
  * @brief Poll the i2c slave for events.
  */
-static void vPollSlaveLoop( int iDevice )
+static void vPollSlaveLoop( void )
 {
     if( INVALID_FD != iDevice )
     {
@@ -189,7 +325,7 @@ static void vPollSlaveLoop( int iDevice )
 
             if( ( xPoll.revents & POLLIN ) == POLLIN )
             {
-                vGetSlaveEvent( iDevice );
+                vGetSlaveEvent();
             }
         }
 
@@ -206,7 +342,7 @@ static void vPollSlaveLoop( int iDevice )
 /**
  * @brief Set the slave response data.
  */
-static void vSetSlaveData( int iDevice )
+static void vSetSlaveData( void )
 {
     if( INVALID_FD != iDevice )
     {
@@ -236,7 +372,7 @@ static void vSetSlaveData( int iDevice )
 /**
  * @brief Get data written to the slave.
  */
-static void vGetSlaveData( int iDevice )
+static void vGetSlaveData( void )
 {
     if( INVALID_FD != iDevice )
     {
@@ -255,7 +391,7 @@ static void vGetSlaveData( int iDevice )
 /**
  * @brief Get the last slave event.
  */
-static void vGetSlaveEvent( int iDevice )
+static void vGetSlaveEvent( void )
 {
     if( INVALID_FD != iDevice )
     {
@@ -282,68 +418,93 @@ static void vGetSlaveEvent( int iDevice )
  */
 int main()
 {
-    int iDevice = INVALID_FD;
     uint8_t ucInput = USER_CMD_QUIT;
 
-    /* Try to open the device file. */
-    SMBUS_PRINTF( "Opening device...\r\n" );
-    iDevice = open( DEVICE_FILE, O_RDWR | O_NONBLOCK );
-
-    if( INVALID_FD != iDevice )
+    /* Try to open the device if it exists. The user can also do this later with a command. */
+    if( LINUX_OK == access( DEVICE_FILE, F_OK ) )
     {
-        vDisplayCommands();
-
-        do
-        {
-            ucInput = ucInputByte( "Enter command", false, false );
-
-            switch( ucInput )
-            {
-                case USER_CMD_SET_DATA:
-                {
-                    vSetSlaveData( iDevice );
-                    break;
-                }
-
-                case USER_CMD_GET_DATA:
-                {
-                    vGetSlaveData( iDevice );
-                    break;
-                }
-
-                case USER_CMD_POLL:
-                {
-                    vPollSlaveLoop( iDevice );
-                    break;
-                }
-
-                case USER_CMD_HELP:
-                {
-                    vDisplayCommands();
-                    break;
-                }
-
-                case USER_CMD_QUIT:
-                {
-                    bQuit = true;
-                    break;
-                }
-
-                default:
-                {
-                    SMBUS_PRINTF_ERR( "Invalid command (%d)\r\n", ucInput );
-                    vDisplayCommands();
-                    break;
-                }
-            }
-
-        } while( false == bQuit );
-
-        SMBUS_PRINTF( "Closing device file...\r\n" );
-        close( iDevice );
+        SMBUS_PRINTF( "Found existing device, opening...\r\n" );
+        vOpenDevice();
     }
     else
     {
-        SMBUS_PRINTF_ERR( "Cannot open device file...\r\n" );
+        SMBUS_PRINTF( "Could not find existing device. Create a new one with the appropriate command.\r\n" );
+    }
+
+    vDisplayCommands();
+
+    do
+    {
+        ucInput = ucInputByte( "Enter command", false, false );
+
+        switch( ucInput )
+        {
+            case USER_CMD_SET_DATA:
+            {
+                vSetSlaveData();
+                break;
+            }
+
+            case USER_CMD_GET_DATA:
+            {
+                vGetSlaveData();
+                break;
+            }
+
+            case USER_CMD_POLL:
+            {
+                vPollSlaveLoop();
+                break;
+            }
+
+            case USER_CMD_HELP:
+            {
+                vDisplayCommands();
+                break;
+            }
+
+            case USER_CMD_OPEN_DEVICE:
+            {
+                vOpenDevice();
+                break;
+            }
+
+            case USER_CMD_NEW_DEVICE:
+            {
+                uint8_t ucBusNum = ucInputByte( "Enter bus number", false, false );
+                uint8_t ucAddr = ucInputByte( "Enter slave address", true, false );
+                vNewSlaveDevice( ( int )ucBusNum, ucAddr );
+                break;
+            }
+
+            case USER_CMD_DELETE_DEVICE:
+            {
+                uint8_t ucBusNum = ucInputByte( "Enter bus number", false, false );
+                uint8_t ucAddr = ucInputByte( "Enter slave address", true, false );
+                vDeleteSlaveDevice( ( int )ucBusNum, ucAddr );
+                break;
+            }
+
+            case USER_CMD_QUIT:
+            {
+                bQuit = true;
+                break;
+            }
+
+            default:
+            {
+                SMBUS_PRINTF_ERR( "Invalid command (%d)\r\n", ucInput );
+                vDisplayCommands();
+                break;
+            }
+        }
+
+    } while( false == bQuit );
+
+    /* Close the device file if it was opened. */
+    if( INVALID_FD != iDevice )
+    {
+        SMBUS_PRINTF( "Closing device file...\r\n" );
+        close( iDevice );
     }
 }
