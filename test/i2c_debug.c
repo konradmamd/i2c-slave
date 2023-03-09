@@ -1,8 +1,7 @@
 /**
- * @file test_master.c
+ * @file i2c_debug.c
  * @author Konrad Mosoczy (konradm@amd.com)
- * @brief Source code for the `test_master` tool similar to `i2c-tools`
-          (originally `i2c-debug`)
+ * @brief Source code for the `i2c-debug` tool similar to `i2c-tools`
  * @date 2022-12-21
  * 
  * Copyright (c) 2022-present Advanced Micro Devices, Inc. All rights reserved.

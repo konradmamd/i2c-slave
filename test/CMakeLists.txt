@@ -14,16 +14,16 @@ target_include_directories(test_slave PRIVATE
 target_link_libraries(test_slave)
 
 # smbus master test
-add_executable(test_master
-    ${CMAKE_CURRENT_SOURCE_DIR}/test_master.c
+add_executable(i2c-debug
+    ${CMAKE_CURRENT_SOURCE_DIR}/i2c_debug.c
     ${CMAKE_CURRENT_SOURCE_DIR}/test_utils.c
     ${CMAKE_CURRENT_SOURCE_DIR}/test_utils.h
     ${CMAKE_SOURCE_DIR}/smbus/smbus.h
 )
 
-target_include_directories(test_master PRIVATE
+target_include_directories(i2c-debug PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/smbus
 )
 
-target_link_libraries(test_master smbus)
+target_link_libraries(i2c-debug smbus)
