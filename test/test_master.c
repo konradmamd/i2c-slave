@@ -41,6 +41,12 @@ typedef enum USER_CMD
     USER_CMD_RECEIVE_BYTE = SMBUS_PROTOCOL_RECEIVE_BYTE,
     USER_CMD_WRITE_BYTE   = SMBUS_PROTOCOL_WRITE_BYTE,
     USER_CMD_READ_BYTE    = SMBUS_PROTOCOL_READ_BYTE,
+    USER_CMD_READ_WORD    = SMBUS_PROTOCOL_READ_WORD,
+    USER_CMD_WRITE_WORD   = SMBUS_PROTOCOL_WRITE_WORD,
+    USER_CMD_WRITE_32     = SMBUS_PROTOCOL_WRITE_32,
+    USER_CMD_READ_32      = SMBUS_PROTOCOL_READ_32,
+    USER_CMD_WRITE_64     = SMBUS_PROTOCOL_WRITE_64,
+    USER_CMD_READ_64      = SMBUS_PROTOCOL_READ_64,
 
     USER_CMD_HELP         = ( uint8_t )( -1 )
 
@@ -91,6 +97,12 @@ static void vDisplayCommands( void )
     PRINT_ENUM( USER_CMD_RECEIVE_BYTE );
     PRINT_ENUM( USER_CMD_WRITE_BYTE);
     PRINT_ENUM( USER_CMD_READ_BYTE );
+    PRINT_ENUM( USER_CMD_WRITE_WORD );
+    PRINT_ENUM( USER_CMD_READ_WORD );
+    PRINT_ENUM( USER_CMD_READ_32 );
+    PRINT_ENUM( USER_CMD_WRITE_32 );
+    PRINT_ENUM( USER_CMD_READ_64 );
+    PRINT_ENUM( USER_CMD_WRITE_64 );
     NEW_LINE;
 }
 
@@ -110,6 +122,7 @@ static void vDoSMBusTransaction( SMBUS_PROTOCOL_COMMANDS eProtocol )
         struct i2c_msg xMessages[ 2 ] = { 0 };
         struct i2c_rdwr_ioctl_data xData = { 0 };
 
+        bool bSendCmd = true;
         uint8_t iTransactionType = 0;
 
         switch( eProtocol )
@@ -117,30 +130,79 @@ static void vDoSMBusTransaction( SMBUS_PROTOCOL_COMMANDS eProtocol )
             case SMBUS_PROTOCOL_WRITE_BYTE:
             {
                 iTransactionType = WRITE;
-                pucWrBuffer[ usWrLen++ ] = ( uint8_t )SMBUS_PROTOCOL_WRITE_BYTE;  /* command */
-                pucWrBuffer[ usWrLen++ ] = pucWrData[ 0 ];  /* data byte */
+                usWrLen = 2;  /* command + data byte */
                 break;
             }
 
             case SMBUS_PROTOCOL_READ_BYTE:
             {
                 iTransactionType = WRITE | READ;
-                pucWrBuffer[ usWrLen++ ] = ( uint8_t )SMBUS_PROTOCOL_READ_BYTE;  /* command */
+                usWrLen = 1;  /* command */
                 usRdLen = 1;  /* Reading back 1 byte. */
                 break;
             }
 
             case SMBUS_PROTOCOL_SEND_BYTE:
             {
+                /* 
+                 * Technically, this doesn't send a command but we treat the command as a data byte.
+                 * Leave `bSendCmd` set to `true`.
+                 */
                 iTransactionType = WRITE;
-                pucWrBuffer[ usWrLen++ ] = ( uint8_t )SMBUS_PROTOCOL_SEND_BYTE;  /* data byte */
+                usWrLen = 1;
                 break;
             }
 
             case SMBUS_PROTOCOL_RECEIVE_BYTE:
             {
                 iTransactionType = READ;
+                bSendCmd = false;
                 usRdLen = 1;  /* Reading 1 byte with no command. */
+                break;
+            }
+
+            case SMBUS_PROTOCOL_WRITE_WORD:
+            {
+                iTransactionType = WRITE;
+                usWrLen = 3;
+                break;
+            }
+
+            case SMBUS_PROTOCOL_READ_WORD:
+            {
+                iTransactionType = WRITE | READ;
+                usWrLen = 1;
+                usRdLen = 2;  /* Reading back 1 byte. */
+                break;
+            }
+
+            case SMBUS_PROTOCOL_READ_32:
+            {
+                iTransactionType = WRITE | READ;
+                usWrLen = 1;
+                usRdLen = 4;
+                break;
+            }
+
+            case SMBUS_PROTOCOL_WRITE_32:
+            {
+                iTransactionType = WRITE;
+                usWrLen = 5;
+                break;
+            }
+
+            case SMBUS_PROTOCOL_READ_64:
+            {
+                iTransactionType = READ | WRITE;
+                usWrLen = 1;
+                usRdLen = 8;
+                break;
+            }
+
+            case SMBUS_PROTOCOL_WRITE_64:
+            {
+                iTransactionType = WRITE;
+                usWrLen = 9;
                 break;
             }
 
@@ -148,6 +210,19 @@ static void vDoSMBusTransaction( SMBUS_PROTOCOL_COMMANDS eProtocol )
             {
                 break;
             }
+        }
+
+        /* Set wr data. */
+        uint16_t usWrIndex = 0;
+
+        if( ( bSendCmd ) && ( 0 < usWrLen ) )
+        {
+            pucWrBuffer[ usWrIndex++ ] = ( uint8_t )eProtocol;
+        }
+
+        for( usWrIndex; usWrIndex < usWrLen; usWrIndex++ )
+        {
+            pucWrBuffer[ usWrIndex ] = pucWrData[ usWrIndex ];
         }
 
         if( iTransactionType & WRITE )
@@ -243,6 +318,12 @@ int main()
                 case USER_CMD_READ_BYTE:
                 case USER_CMD_SEND_BYTE:
                 case USER_CMD_WRITE_BYTE:
+                case USER_CMD_WRITE_WORD:
+                case USER_CMD_READ_WORD:
+                case USER_CMD_READ_32:
+                case USER_CMD_WRITE_32:
+                case USER_CMD_READ_64:
+                case USER_CMD_WRITE_64:
                 {
                     vDoSMBusTransaction( ( SMBUS_PROTOCOL_COMMANDS )ucInput );
                     break;

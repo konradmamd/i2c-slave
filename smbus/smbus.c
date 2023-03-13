@@ -28,6 +28,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <stdbool.h>
+#include <endian.h>
 #include <sys/ioctl.h>
 
 /* External includes */
@@ -320,18 +321,25 @@ int smbus_read_byte( uint8_t ucAddr, uint8_t ucCmd, uint8_t* pucData, bool bPec 
  */
 int smbus_write_word( uint8_t ucAddr, uint8_t ucCmd, uint16_t usData, bool bPec )
 {
-    // int iStatus = SMBUS_STATUS_ERROR;
+    int iStatus = SMBUS_STATUS_ERROR;
 
-    // if( ( LINUX_STATUS_INVALID_HANDLE != iBusHandle ) &&
-    //     ( SMBUS_STATUS_OK == iClaimSlave( ucAddr, bPec ) ) )
-    // {
-    //     if( LINUX_STATUS_RW_OK == i2c_smbus_write_word_data( iBusHandle, ucCmd, usData ) )
-    //     {
-    //         iStatus = SMBUS_STATUS_OK;
-    //     }
-    // }
+    if( LINUX_STATUS_INVALID_HANDLE != iBusHandle )
+    {
+        uint16_t usWrIndex = 0;
+        uint16_t usLeData = htole16( usData );
 
-    // return iStatus;
+        xConSMBusData.usAddr                     = ( uint8_t )ucAddr;
+        xConSMBusData.bPec                       = bPec;
+        xConSMBusData.pucWrBuffer[ usWrIndex++ ] = ucCmd;
+        xConSMBusData.pucWrBuffer[ usWrIndex++ ] = ( uint8_t )( usLeData );
+        xConSMBusData.pucWrBuffer[ usWrIndex++ ] = ( uint8_t )( usLeData >> 8);
+        xConSMBusData.usWrLen                    = usWrIndex;
+        xConSMBusData.usRdLen                    = DATA_SIZE_EMPTY;
+
+        iStatus = iDoTransaction( TRANSACTION_TYPE_WRITE );
+    }
+
+    return iStatus;
 }
 
 /**
@@ -339,22 +347,32 @@ int smbus_write_word( uint8_t ucAddr, uint8_t ucCmd, uint16_t usData, bool bPec 
  */
 int smbus_read_word( uint8_t ucAddr, uint8_t ucCmd, uint16_t* pusData, bool bPec )
 {
-    // int iStatus = SMBUS_STATUS_ERROR;
+    int iStatus = SMBUS_STATUS_ERROR;
 
-    // if( ( LINUX_STATUS_INVALID_HANDLE != iBusHandle ) && 
-    //     ( NULL != pusData ) &&
-    //     ( SMBUS_STATUS_OK == iClaimSlave( ucAddr, bPec ) ) )
-    // {
-    //     int iTempWord = i2c_smbus_read_word_data( iBusHandle, ucCmd );
+    if( ( LINUX_STATUS_INVALID_HANDLE != iBusHandle ) &&
+        ( NULL != pusData ) )
+    {
+        uint16_t usWrIndex = 0;
 
-    //     if( LINUX_STATUS_RW_ERROR != iTempWord )
-    //     {
-    //         *pusData = ( uint16_t )iTempWord;
-    //         iStatus = SMBUS_STATUS_OK;
-    //     }
-    // }
-    
-    // return iStatus;
+        xConSMBusData.usAddr                     = ( uint8_t )ucAddr;
+        xConSMBusData.bPec                       = bPec;
+        xConSMBusData.pucWrBuffer[ usWrIndex++ ] = ucCmd;
+        xConSMBusData.usWrLen                    = usWrIndex;
+        xConSMBusData.usRdLen                    = DATA_SIZE_WORD;
+
+        memset( xConSMBusData.pucRdBuffer, 0xFF, SMBUS_MAX_BUFFER );
+
+        if( SMBUS_STATUS_OK == iDoTransaction( TRANSACTION_TYPE_READ | TRANSACTION_TYPE_WRITE ) )
+        {
+            uint16_t usLeData = ( ( uint16_t )( xConSMBusData.pucRdBuffer[ 1 ] << 8 ) );
+            usLeData         |=   ( uint16_t )( xConSMBusData.pucRdBuffer[ 0 ] );
+
+            *pusData = le16toh( usLeData );
+            iStatus = SMBUS_STATUS_OK;
+        }
+    }
+
+    return iStatus;
 }
 
 /**
@@ -362,7 +380,27 @@ int smbus_read_word( uint8_t ucAddr, uint8_t ucCmd, uint16_t* pusData, bool bPec
  */
 int smbus_write_32( uint8_t ucAddr, uint8_t ucCmd, uint32_t ulData, bool bPec )
 {
-    OPERATION_NOT_SUPPORTED;
+    int iStatus = SMBUS_STATUS_ERROR;
+
+    if( LINUX_STATUS_INVALID_HANDLE != iBusHandle )
+    {
+        uint16_t usWrIndex = 0;
+        uint32_t ulLeData = htole32( ulData );
+
+        xConSMBusData.usAddr                     = ( uint8_t )ucAddr;
+        xConSMBusData.bPec                       = bPec;
+        xConSMBusData.pucWrBuffer[ usWrIndex++ ] = ucCmd;
+        xConSMBusData.pucWrBuffer[ usWrIndex++ ] = ( uint8_t )( ulLeData );
+        xConSMBusData.pucWrBuffer[ usWrIndex++ ] = ( uint8_t )( ulLeData >> 8);
+        xConSMBusData.pucWrBuffer[ usWrIndex++ ] = ( uint8_t )( ulLeData >> 16);
+        xConSMBusData.pucWrBuffer[ usWrIndex++ ] = ( uint8_t )( ulLeData >> 24);
+        xConSMBusData.usWrLen                    = usWrIndex;
+        xConSMBusData.usRdLen                    = DATA_SIZE_EMPTY;
+
+        iStatus = iDoTransaction( TRANSACTION_TYPE_WRITE );
+    }
+
+    return iStatus;
 }
 
 /**
@@ -370,7 +408,34 @@ int smbus_write_32( uint8_t ucAddr, uint8_t ucCmd, uint32_t ulData, bool bPec )
  */
 int smbus_read_32( uint8_t ucAddr, uint8_t ucCmd, uint32_t* pulData, bool bPec )
 {
-    OPERATION_NOT_SUPPORTED;
+    int iStatus = SMBUS_STATUS_ERROR;
+
+    if( ( LINUX_STATUS_INVALID_HANDLE != iBusHandle ) &&
+        ( NULL != pulData ) )
+    {
+        uint16_t usWrIndex = 0;
+
+        xConSMBusData.usAddr                     = ( uint8_t )ucAddr;
+        xConSMBusData.bPec                       = bPec;
+        xConSMBusData.pucWrBuffer[ usWrIndex++ ] = ucCmd;
+        xConSMBusData.usWrLen                    = usWrIndex;
+        xConSMBusData.usRdLen                    = DATA_SIZE_32_BIT;
+
+        memset( xConSMBusData.pucRdBuffer, 0xFF, SMBUS_MAX_BUFFER );
+
+        if( SMBUS_STATUS_OK == iDoTransaction( TRANSACTION_TYPE_READ | TRANSACTION_TYPE_WRITE ) )
+        {
+            uint32_t ulLeData = ( ( uint32_t )( xConSMBusData.pucRdBuffer[ 3 ] ) << 24 );
+            ulLeData         |= ( ( uint32_t )( xConSMBusData.pucRdBuffer[ 2 ] ) << 16 );
+            ulLeData         |= ( ( uint32_t )( xConSMBusData.pucRdBuffer[ 1 ] ) << 8 );
+            ulLeData         |=   ( uint32_t )( xConSMBusData.pucRdBuffer[ 0 ] );
+
+            *pulData = le32toh( ulLeData );
+            iStatus = SMBUS_STATUS_OK;
+        }
+    }
+
+    return iStatus;
 }
 
 /**
@@ -378,7 +443,31 @@ int smbus_read_32( uint8_t ucAddr, uint8_t ucCmd, uint32_t* pulData, bool bPec )
  */
 int smbus_write_64( uint8_t ucAddr, uint8_t ucCmd, uint64_t ullData, bool bPec )
 {
-    OPERATION_NOT_SUPPORTED;
+    int iStatus = SMBUS_STATUS_ERROR;
+
+    if( LINUX_STATUS_INVALID_HANDLE != iBusHandle )
+    {
+        uint16_t usWrIndex = 0;
+        uint64_t ullLeData = htole64( ullData );
+
+        xConSMBusData.usAddr                     = ( uint8_t )ucAddr;
+        xConSMBusData.bPec                       = bPec;
+        xConSMBusData.pucWrBuffer[ usWrIndex++ ] = ucCmd;
+        xConSMBusData.pucWrBuffer[ usWrIndex++ ] = ( uint8_t )( ullLeData );
+        xConSMBusData.pucWrBuffer[ usWrIndex++ ] = ( uint8_t )( ullLeData >> 8 );
+        xConSMBusData.pucWrBuffer[ usWrIndex++ ] = ( uint8_t )( ullLeData >> 16 );
+        xConSMBusData.pucWrBuffer[ usWrIndex++ ] = ( uint8_t )( ullLeData >> 24 );
+        xConSMBusData.pucWrBuffer[ usWrIndex++ ] = ( uint8_t )( ullLeData >> 32 );
+        xConSMBusData.pucWrBuffer[ usWrIndex++ ] = ( uint8_t )( ullLeData >> 40 );
+        xConSMBusData.pucWrBuffer[ usWrIndex++ ] = ( uint8_t )( ullLeData >> 48 );
+        xConSMBusData.pucWrBuffer[ usWrIndex++ ] = ( uint8_t )( ullLeData >> 56 );
+        xConSMBusData.usWrLen                    = usWrIndex;
+        xConSMBusData.usRdLen                    = DATA_SIZE_EMPTY;
+
+        iStatus = iDoTransaction( TRANSACTION_TYPE_WRITE );
+    }
+
+    return iStatus;
 }
 
 /**
@@ -386,7 +475,38 @@ int smbus_write_64( uint8_t ucAddr, uint8_t ucCmd, uint64_t ullData, bool bPec )
  */
 int smbus_read_64( uint8_t ucAddr, uint8_t ucCmd, uint64_t* pullData, bool bPec )
 {
-    OPERATION_NOT_SUPPORTED;
+    int iStatus = SMBUS_STATUS_ERROR;
+
+    if( ( LINUX_STATUS_INVALID_HANDLE != iBusHandle ) &&
+        ( NULL != pullData ) )
+    {
+        uint16_t usWrIndex = 0;
+
+        xConSMBusData.usAddr                     = ( uint8_t )ucAddr;
+        xConSMBusData.bPec                       = bPec;
+        xConSMBusData.pucWrBuffer[ usWrIndex++ ] = ucCmd;
+        xConSMBusData.usWrLen                    = usWrIndex;
+        xConSMBusData.usRdLen                    = DATA_SIZE_64_BIT;
+
+        memset( xConSMBusData.pucRdBuffer, 0xFF, SMBUS_MAX_BUFFER );
+
+        if( SMBUS_STATUS_OK == iDoTransaction( TRANSACTION_TYPE_READ | TRANSACTION_TYPE_WRITE ) )
+        {
+            uint64_t ullLeData = ( ( uint64_t )( xConSMBusData.pucRdBuffer[ 7 ] ) << 56 );
+            ullLeData         |= ( ( uint64_t )( xConSMBusData.pucRdBuffer[ 6 ] ) << 48 );
+            ullLeData         |= ( ( uint64_t )( xConSMBusData.pucRdBuffer[ 5 ] ) << 40 );
+            ullLeData         |= ( ( uint64_t )( xConSMBusData.pucRdBuffer[ 4 ] ) << 32 );
+            ullLeData         |= ( ( uint64_t )( xConSMBusData.pucRdBuffer[ 3 ] ) << 24 );
+            ullLeData         |= ( ( uint64_t )( xConSMBusData.pucRdBuffer[ 2 ] ) << 16 );
+            ullLeData         |= ( ( uint64_t )( xConSMBusData.pucRdBuffer[ 1 ] ) << 8 );
+            ullLeData         |=   ( uint64_t )( xConSMBusData.pucRdBuffer[ 0 ] );
+
+            *pullData = le64toh( ullLeData );
+            iStatus = SMBUS_STATUS_OK;
+        }
+    }
+
+    return iStatus;
 }
 
 /**
