@@ -8,6 +8,14 @@
  * 
  */
 
+ /* 
+  * NOTE: See https://www.kernel.org/doc/Documentation/i2c/dev-interface for reference.
+  * To summarise, there are mulitiple approaches to performing SMBus commands:
+  *     - Using read/write calls for raw I2C (does not support repeated start)
+  *     - Using I2C_SMBUS ioctl or the related i2c_smbus_XXX functions
+  *     - Using I2C_RDWR ioctl calls for raw I2C with repeated start support
+  */
+
 /*****************************************************************************/
 /* Includes                                                                  */
 /*****************************************************************************/
@@ -39,12 +47,18 @@
 #define UNINIT_ADDR               ( 0x00 )
 #define SMBUS_FILENAME_LEN        ( 30   )
 
+/*
+ * See http://www.merkles.com/Using_I2C/5_struct_i2c_msg.html 
+ * See also linux/i2c.h and linux/i2c-dev.h
+ */
+#define I2C_MSG_NO_FLAGS          ( 0 )
+
 /*****************************************************************************/
-/* Enums                                                                     */
+/* Enums, Structs                                                            */
 /*****************************************************************************/
 
 /**
- * @enum LINUX_STATUS
+ * @enum  LINUX_STATUS
  * @brief Enum wrapper around Linux I2C API return codes
  */
 typedef enum LINUX_STATUS
@@ -59,71 +73,86 @@ typedef enum LINUX_STATUS
 
 } LINUX_STATUS;
 
+/**
+ * @enum  TRANSACTION_TYPE
+ * @brief Bitflags to set the type of SMBus transaction being performed
+ * 
+ */
+typedef enum TRANSACTION_TYPE
+{
+    TRANSACTION_TYPE_READ  = 0x01,
+    TRANSACTION_TYPE_WRITE = 0x02
+    
+} TRANSACTION_TYPE;
+
+/**
+ * @enum  DATA_SIZE
+ * @brief SMBus data size constants
+ */
+typedef enum DATA_SIZE
+{
+    DATA_SIZE_EMPTY  = 0,
+    DATA_SIZE_BYTE   = 1,
+    DATA_SIZE_WORD   = 2,
+    DATA_SIZE_32_BIT = 4,
+    DATA_SIZE_64_BIT = 8
+
+} DATA_SIZE;
+
+/**
+ * @struct SMBUS_DATA
+ * @brief  Data related to a single SMBus transaction
+ *
+ * @note   We need two separate buffers - one for Wr data and one for Rd data
+ *         because we must send all messages in a single transaction/ioctl call.
+ *         This is because a stop bit will be automatically sent after the last
+ *         message, meaning we can't split messages into multiple ioctl calls
+ *         for a single SMBus transaction. We will only ever need two messages
+ *         at most.
+ */
+typedef struct SMBUS_DATA
+{
+    uint16_t   usAddr;
+    bool       bPec;
+
+    /* Data following a WR bit. Data sent if master, data received if slave. */
+    uint16_t   usWrLen;
+    uint8_t    pucWrBuffer[ SMBUS_MAX_BUFFER ];
+
+    /* Data following a RD bit. Data received if master, data sent if slave. */
+    uint16_t   usRdLen;
+    uint8_t    pucRdBuffer[ SMBUS_MAX_BUFFER ];
+
+} SMBUS_DATA;
+
+/*****************************************************************************/
+/* Function declarations                                                     */
+/*****************************************************************************/
+
+/**
+ * @brief Perform a single I2C transaction.
+ * 
+ * @param eTransactionType     Type of transaction to perform
+ *
+ * @return SMBUS_STATUS_OK     Transaction was successful
+ *         SMBUS_STATUS_ERROR  Transaction was unsuccessful
+ */
+static int iDoTransaction( TRANSACTION_TYPE eTransactionType );
+
 /*****************************************************************************/
 /* Global Variables                                                          */
 /*****************************************************************************/
 
-static uint8_t ucCurrentSlaveAddr = UNINIT_ADDR;
+static SMBUS_DATA xConSMBusData = {
+    .usAddr        = 0,
+    .bPec          = false,
+    .usWrLen       = 0,
+    .usRdLen       = 0,
+    .pucRdBuffer   = { 0 },
+    .pucWrBuffer   = { 0 }
+};
+
 static int iBusHandle = LINUX_STATUS_INVALID_HANDLE;
-
-/*****************************************************************************/
-/* Local Function Declarations                                               */
-/*****************************************************************************/
-
-/**
- * @brief Try to claim a slave device at a specific address,
- *   only if it is not claimed already.
- * 
- * @param ucAddr Address of the slave device
- * @param bPec   Enable/disable PEC for this device
- * 
- * @return  SMBUS_STATUS_OK     SMBus operation successful
- *          SMBUS_STATUS_ERROR  SMBus operation unsuccessful
- */
-static int iClaimSlave( uint8_t ucAddr, bool bPec );
-
-/*****************************************************************************/
-/* Local Function Definitions                                                */
-/*****************************************************************************/
-
-/**
- * @brief Claim an i2c slave device with ioctl calls.
- */
-static int iClaimSlave( uint8_t ucAddr, bool bPec )
-{
-    int iStatus = SMBUS_STATUS_ERROR;
-
-    if( LINUX_STATUS_INVALID_HANDLE != iBusHandle )
-    {
-        /* Make I2C_SLAVE ioctl call. */
-        if( ucCurrentSlaveAddr != ucAddr )
-        {
-            if( LINUX_STATUS_RW_ERROR != ioctl( iBusHandle, I2C_SLAVE, ucAddr ) )
-            {
-                ucCurrentSlaveAddr = ucAddr;
-                iStatus = SMBUS_STATUS_OK;
-            }
-        }
-        else
-        {
-            iStatus = SMBUS_STATUS_OK;
-        }
-
-        /* Enable/disable PEC. TODO: Test this. */
-        if( SMBUS_STATUS_OK == iStatus )
-        {
-            iStatus = SMBUS_STATUS_ERROR;
-            int iPecSelect = ( bPec ) ? ( ucAddr ) : ( 0 );  /* 0 to disable, `ucAddr` otherwise */
-
-            if( LINUX_STATUS_RW_ERROR != ioctl( iBusHandle, I2C_PEC, iPecSelect ) )
-            {
-                iStatus = SMBUS_STATUS_OK;
-            }
-        }
-    }
-
-    return iStatus;
-}
 
 /*****************************************************************************/
 /* Public Function Definitions - General                                     */
@@ -166,7 +195,6 @@ int smbus_deinit( void )
     {
         iStatus = SMBUS_STATUS_OK;
         iBusHandle = LINUX_STATUS_INVALID_HANDLE;
-        ucCurrentSlaveAddr = UNINIT_ADDR;
     }
 
     return iStatus;
@@ -193,13 +221,17 @@ int smbus_send_byte( uint8_t ucAddr, uint8_t ucData, bool bPec )
 {
     int iStatus = SMBUS_STATUS_ERROR;
 
-    if( ( LINUX_STATUS_INVALID_HANDLE != iBusHandle ) &&
-        ( SMBUS_STATUS_OK == iClaimSlave( ucAddr, bPec ) ) )
+    if( LINUX_STATUS_INVALID_HANDLE != iBusHandle )
     {
-        if( LINUX_STATUS_RW_OK == i2c_smbus_write_byte( iBusHandle, ucData ) )
-        {
-            iStatus = SMBUS_STATUS_OK;
-        }
+        uint16_t usWrIndex = 0;
+
+        xConSMBusData.usAddr                     = ( uint8_t )ucAddr;
+        xConSMBusData.bPec                       = bPec;
+        xConSMBusData.pucWrBuffer[ usWrIndex++ ] = ucData;
+        xConSMBusData.usWrLen                    = usWrIndex;
+        xConSMBusData.usRdLen                    = DATA_SIZE_EMPTY;
+
+        iStatus = iDoTransaction( TRANSACTION_TYPE_WRITE );
     }
 
     return iStatus;
@@ -212,15 +244,18 @@ int smbus_receive_byte( uint8_t ucAddr, uint8_t* pucData, bool bPec )
 {
     int iStatus = SMBUS_STATUS_ERROR;
 
-    if( ( LINUX_STATUS_INVALID_HANDLE != iBusHandle ) && 
-        ( NULL != pucData ) &&
-        ( SMBUS_STATUS_OK == iClaimSlave( ucAddr, bPec ) ) )
+    if( LINUX_STATUS_INVALID_HANDLE != iBusHandle )
     {
-        int iTempByte = i2c_smbus_read_byte( iBusHandle );
-        
-        if( LINUX_STATUS_RW_ERROR != iTempByte )
+        xConSMBusData.usAddr         = ( uint8_t )ucAddr;
+        xConSMBusData.bPec           = bPec;
+        xConSMBusData.usWrLen        = DATA_SIZE_EMPTY;
+        xConSMBusData.usRdLen        = DATA_SIZE_BYTE;
+
+        memset( xConSMBusData.pucRdBuffer, 0xFF, SMBUS_MAX_BUFFER );
+
+        if( SMBUS_STATUS_OK == iDoTransaction( TRANSACTION_TYPE_READ ) )
         {
-            *pucData = ( uint8_t )iTempByte;
+            *pucData = ( uint8_t )( xConSMBusData.pucRdBuffer[ 0 ] );
             iStatus = SMBUS_STATUS_OK;
         }
     }
@@ -235,13 +270,18 @@ int smbus_write_byte( uint8_t ucAddr, uint8_t ucCmd, uint8_t ucData, bool bPec )
 {
     int iStatus = SMBUS_STATUS_ERROR;
 
-    if( ( LINUX_STATUS_INVALID_HANDLE != iBusHandle ) &&
-        ( SMBUS_STATUS_OK == iClaimSlave( ucAddr, bPec ) ) )
+    if( LINUX_STATUS_INVALID_HANDLE != iBusHandle )
     {
-        if( LINUX_STATUS_RW_OK == i2c_smbus_write_byte_data( iBusHandle, ucCmd, ucData ) )
-        {
-            iStatus = SMBUS_STATUS_OK;
-        }
+        uint16_t usWrIndex = 0;
+
+        xConSMBusData.usAddr                     = ( uint8_t )ucAddr;
+        xConSMBusData.bPec                       = bPec;
+        xConSMBusData.pucWrBuffer[ usWrIndex++ ] = ucCmd;
+        xConSMBusData.pucWrBuffer[ usWrIndex++ ] = ucData;
+        xConSMBusData.usWrLen                    = usWrIndex;
+        xConSMBusData.usRdLen                    = DATA_SIZE_EMPTY;
+
+        iStatus = iDoTransaction( TRANSACTION_TYPE_WRITE );
     }
 
     return iStatus;
@@ -254,16 +294,21 @@ int smbus_read_byte( uint8_t ucAddr, uint8_t ucCmd, uint8_t* pucData, bool bPec 
 {
     int iStatus = SMBUS_STATUS_ERROR;
 
-    if( ( LINUX_STATUS_INVALID_HANDLE != iBusHandle ) && 
-        ( NULL != pucData ) &&
-        ( SMBUS_STATUS_OK == iClaimSlave( ucAddr, bPec ) ) )
+    if( LINUX_STATUS_INVALID_HANDLE != iBusHandle )
     {
-        int iTempByte = i2c_smbus_read_byte_data( iBusHandle, ucCmd );
-        
-        if( LINUX_STATUS_RW_ERROR != iTempByte )
+        uint16_t usWrIndex = 0;
+
+        xConSMBusData.usAddr                     = ( uint8_t )ucAddr;
+        xConSMBusData.bPec                       = bPec;
+        xConSMBusData.pucWrBuffer[ usWrIndex++ ] = ucCmd;
+        xConSMBusData.usWrLen                    = usWrIndex;
+        xConSMBusData.usRdLen                    = DATA_SIZE_BYTE;
+
+        memset( xConSMBusData.pucRdBuffer, 0xFF, SMBUS_MAX_BUFFER );
+
+        if( SMBUS_STATUS_OK == iDoTransaction( TRANSACTION_TYPE_READ | TRANSACTION_TYPE_WRITE ) )
         {
-            *pucData = ( uint8_t )iTempByte;
-            iStatus = SMBUS_STATUS_OK;
+            *pucData = ( uint8_t )( xConSMBusData.pucRdBuffer[ 0 ] );
         }
     }
 
@@ -275,18 +320,18 @@ int smbus_read_byte( uint8_t ucAddr, uint8_t ucCmd, uint8_t* pucData, bool bPec 
  */
 int smbus_write_word( uint8_t ucAddr, uint8_t ucCmd, uint16_t usData, bool bPec )
 {
-    int iStatus = SMBUS_STATUS_ERROR;
+    // int iStatus = SMBUS_STATUS_ERROR;
 
-    if( ( LINUX_STATUS_INVALID_HANDLE != iBusHandle ) &&
-        ( SMBUS_STATUS_OK == iClaimSlave( ucAddr, bPec ) ) )
-    {
-        if( LINUX_STATUS_RW_OK == i2c_smbus_write_word_data( iBusHandle, ucCmd, usData ) )
-        {
-            iStatus = SMBUS_STATUS_OK;
-        }
-    }
+    // if( ( LINUX_STATUS_INVALID_HANDLE != iBusHandle ) &&
+    //     ( SMBUS_STATUS_OK == iClaimSlave( ucAddr, bPec ) ) )
+    // {
+    //     if( LINUX_STATUS_RW_OK == i2c_smbus_write_word_data( iBusHandle, ucCmd, usData ) )
+    //     {
+    //         iStatus = SMBUS_STATUS_OK;
+    //     }
+    // }
 
-    return iStatus;
+    // return iStatus;
 }
 
 /**
@@ -294,22 +339,22 @@ int smbus_write_word( uint8_t ucAddr, uint8_t ucCmd, uint16_t usData, bool bPec 
  */
 int smbus_read_word( uint8_t ucAddr, uint8_t ucCmd, uint16_t* pusData, bool bPec )
 {
-    int iStatus = SMBUS_STATUS_ERROR;
+    // int iStatus = SMBUS_STATUS_ERROR;
 
-    if( ( LINUX_STATUS_INVALID_HANDLE != iBusHandle ) && 
-        ( NULL != pusData ) &&
-        ( SMBUS_STATUS_OK == iClaimSlave( ucAddr, bPec ) ) )
-    {
-        int iTempWord = i2c_smbus_read_word_data( iBusHandle, ucCmd );
+    // if( ( LINUX_STATUS_INVALID_HANDLE != iBusHandle ) && 
+    //     ( NULL != pusData ) &&
+    //     ( SMBUS_STATUS_OK == iClaimSlave( ucAddr, bPec ) ) )
+    // {
+    //     int iTempWord = i2c_smbus_read_word_data( iBusHandle, ucCmd );
 
-        if( LINUX_STATUS_RW_ERROR != iTempWord )
-        {
-            *pusData = ( uint16_t )iTempWord;
-            iStatus = SMBUS_STATUS_OK;
-        }
-    }
+    //     if( LINUX_STATUS_RW_ERROR != iTempWord )
+    //     {
+    //         *pusData = ( uint16_t )iTempWord;
+    //         iStatus = SMBUS_STATUS_OK;
+    //     }
+    // }
     
-    return iStatus;
+    // return iStatus;
 }
 
 /**
@@ -349,19 +394,19 @@ int smbus_read_64( uint8_t ucAddr, uint8_t ucCmd, uint64_t* pullData, bool bPec 
  */
 int smbus_block_write( uint8_t ucAddr, uint8_t ucCmd, uint8_t* pucData, uint8_t ucLength, bool bPec )
 {
-    int iStatus = SMBUS_STATUS_ERROR;
+    // int iStatus = SMBUS_STATUS_ERROR;
 
-    if( ( LINUX_STATUS_INVALID_HANDLE != iBusHandle ) &&
-        ( NULL != pucData ) && ( SMBUS_MAX_DATA >= ucLength ) &&
-        ( SMBUS_STATUS_OK == iClaimSlave( ucAddr, bPec ) ) )
-    {
-        if( LINUX_STATUS_RW_OK == i2c_smbus_write_block_data( iBusHandle, ucCmd, ucLength, pucData ) )
-        {
-            iStatus = SMBUS_STATUS_OK;
-        }
-    }
+    // if( ( LINUX_STATUS_INVALID_HANDLE != iBusHandle ) &&
+    //     ( NULL != pucData ) && ( SMBUS_MAX_DATA >= ucLength ) &&
+    //     ( SMBUS_STATUS_OK == iClaimSlave( ucAddr, bPec ) ) )
+    // {
+    //     if( LINUX_STATUS_RW_OK == i2c_smbus_write_block_data( iBusHandle, ucCmd, ucLength, pucData ) )
+    //     {
+    //         iStatus = SMBUS_STATUS_OK;
+    //     }
+    // }
 
-    return iStatus;
+    // return iStatus;
 }
 
 /**
@@ -369,26 +414,26 @@ int smbus_block_write( uint8_t ucAddr, uint8_t ucCmd, uint8_t* pucData, uint8_t 
  */
 int smbus_block_read( uint8_t ucAddr, uint8_t ucCmd, uint8_t* pucData, uint8_t* pucLength, bool bPec )
 {
-    int iStatus = SMBUS_STATUS_ERROR;
+    // int iStatus = SMBUS_STATUS_ERROR;
 
-    if( ( LINUX_STATUS_INVALID_HANDLE != iBusHandle ) && 
-        ( NULL != pucData ) && ( NULL != pucLength ) &&
-        ( SMBUS_STATUS_OK == iClaimSlave( ucAddr, bPec ) ) )
-    {
-        int iBytesRead = i2c_smbus_read_block_data( iBusHandle, ucCmd, pucData );
+    // if( ( LINUX_STATUS_INVALID_HANDLE != iBusHandle ) && 
+    //     ( NULL != pucData ) && ( NULL != pucLength ) &&
+    //     ( SMBUS_STATUS_OK == iClaimSlave( ucAddr, bPec ) ) )
+    // {
+    //     int iBytesRead = i2c_smbus_read_block_data( iBusHandle, ucCmd, pucData );
 
-        if( LINUX_STATUS_RW_ERROR != iBytesRead )
-        {
-            *pucLength = ( uint8_t )iBytesRead;
-            iStatus = SMBUS_STATUS_OK;
-        }
-        else
-        {
-            *pucLength = 0;
-        }
-    }
+    //     if( LINUX_STATUS_RW_ERROR != iBytesRead )
+    //     {
+    //         *pucLength = ( uint8_t )iBytesRead;
+    //         iStatus = SMBUS_STATUS_OK;
+    //     }
+    //     else
+    //     {
+    //         *pucLength = 0;
+    //     }
+    // }
 
-    return iStatus;
+    // return iStatus;
 }
 
 /**
@@ -396,22 +441,22 @@ int smbus_block_read( uint8_t ucAddr, uint8_t ucCmd, uint8_t* pucData, uint8_t* 
  */
 int smbus_process_call( uint8_t ucAddr, uint8_t ucCmd, uint16_t usWrData, uint16_t* pusRdData, bool bPec )
 {
-    int iStatus = SMBUS_STATUS_ERROR;
+    // int iStatus = SMBUS_STATUS_ERROR;
 
-    if( ( LINUX_STATUS_INVALID_HANDLE != iBusHandle ) && 
-        ( NULL != pusRdData ) &&
-        ( SMBUS_STATUS_OK == iClaimSlave( ucAddr, bPec ) ) )
-    {
-        int iTempWord = i2c_smbus_process_call( iBusHandle, ucCmd, usWrData );
+    // if( ( LINUX_STATUS_INVALID_HANDLE != iBusHandle ) && 
+    //     ( NULL != pusRdData ) &&
+    //     ( SMBUS_STATUS_OK == iClaimSlave( ucAddr, bPec ) ) )
+    // {
+    //     int iTempWord = i2c_smbus_process_call( iBusHandle, ucCmd, usWrData );
 
-        if( LINUX_STATUS_RW_ERROR != iTempWord )
-        {
-            *pusRdData = ( uint16_t )iTempWord;
-            iStatus = SMBUS_STATUS_OK;
-        }
-    }
+    //     if( LINUX_STATUS_RW_ERROR != iTempWord )
+    //     {
+    //         *pusRdData = ( uint16_t )iTempWord;
+    //         iStatus = SMBUS_STATUS_OK;
+    //     }
+    // }
 
-    return iStatus;
+    // return iStatus;
 }
 
 /**
@@ -422,28 +467,28 @@ int smbus_block_process_call( uint8_t ucAddr, uint8_t ucCmd,
                               uint8_t* pucRdData, uint8_t* pucRdLen,
                               bool bPec )
 {
-    int iStatus = SMBUS_STATUS_ERROR;
+    // int iStatus = SMBUS_STATUS_ERROR;
 
-    if( ( LINUX_STATUS_INVALID_HANDLE != iBusHandle ) && 
-        ( NULL != pucWrData ) && ( NULL != pucRdData ) &&
-        ( NULL != pucRdLen ) && ( SMBUS_MAX_DATA >= ucWrLen ) &&
-        ( SMBUS_STATUS_OK == iClaimSlave( ucAddr, bPec ) ) )
-    {
-        /* Create a temp buffer so we don't override `pucWrData`. */
-        uint8_t pucTempBuffer[ SMBUS_MAX_BUFFER ] = { 0 };
-        memcpy( pucTempBuffer, pucWrData, ucWrLen );
+    // if( ( LINUX_STATUS_INVALID_HANDLE != iBusHandle ) && 
+    //     ( NULL != pucWrData ) && ( NULL != pucRdData ) &&
+    //     ( NULL != pucRdLen ) && ( SMBUS_MAX_DATA >= ucWrLen ) &&
+    //     ( SMBUS_STATUS_OK == iClaimSlave( ucAddr, bPec ) ) )
+    // {
+    //     /* Create a temp buffer so we don't override `pucWrData`. */
+    //     uint8_t pucTempBuffer[ SMBUS_MAX_BUFFER ] = { 0 };
+    //     memcpy( pucTempBuffer, pucWrData, ucWrLen );
 
-        int iBytesRead = i2c_smbus_block_process_call( iBusHandle, ucCmd, ucWrLen, pucTempBuffer );
+    //     int iBytesRead = i2c_smbus_block_process_call( iBusHandle, ucCmd, ucWrLen, pucTempBuffer );
 
-        if( LINUX_STATUS_RW_ERROR != iBytesRead )
-        {
-            *pucRdLen = ( uint8_t )iBytesRead;
-            memcpy( pucRdData, pucTempBuffer, *pucRdLen );
-            iStatus = SMBUS_STATUS_OK;
-        }
-    }
+    //     if( LINUX_STATUS_RW_ERROR != iBytesRead )
+    //     {
+    //         *pucRdLen = ( uint8_t )iBytesRead;
+    //         memcpy( pucRdData, pucTempBuffer, *pucRdLen );
+    //         iStatus = SMBUS_STATUS_OK;
+    //     }
+    // }
 
-    return iStatus;
+    // return iStatus;
 }
 
 /*****************************************************************************/
@@ -486,4 +531,47 @@ int smbus_target_get_data( uint8_t* pucData,
                            bool bPecExpected )
 {
     OPERATION_NOT_SUPPORTED;
+}
+
+/*****************************************************************************/
+/* Local function implementations                                            */
+/*****************************************************************************/
+
+static int iDoTransaction( TRANSACTION_TYPE eTransactionType )
+{
+    int iStatus = SMBUS_STATUS_ERROR;
+
+    if( LINUX_STATUS_INVALID_HANDLE != iBusHandle )
+    {
+        uint8_t ucNumMessages = 0;
+        struct i2c_msg xMessages[ 2 ] = { 0 };
+        struct i2c_rdwr_ioctl_data xData = { 0 };
+
+        if( eTransactionType & TRANSACTION_TYPE_WRITE )
+        {
+            /* Write message is always first. */
+            xMessages[ ucNumMessages ].addr = xConSMBusData.usAddr;
+            xMessages[ ucNumMessages ].flags = I2C_MSG_NO_FLAGS;
+            xMessages[ ucNumMessages ].len = xConSMBusData.usWrLen;
+            xMessages[ ucNumMessages ].buf = &xConSMBusData.pucWrBuffer[ 0 ];
+            ucNumMessages++;
+        }
+
+        if( eTransactionType & TRANSACTION_TYPE_READ )
+        {
+            xMessages[ ucNumMessages ].addr = xConSMBusData.usAddr;
+            xMessages[ ucNumMessages ].flags = I2C_M_RD;
+            xMessages[ ucNumMessages ].len = xConSMBusData.usRdLen;
+            xMessages[ ucNumMessages ].buf = &xConSMBusData.pucRdBuffer[ 0 ];
+            ucNumMessages++;
+        }
+
+        xData.msgs = xMessages;
+        xData.nmsgs = ucNumMessages;
+
+        iStatus = ( LINUX_STATUS_RW_ERROR == ioctl( iBusHandle, I2C_RDWR, &xData ) ) ?
+                  ( SMBUS_STATUS_ERROR ) : ( SMBUS_STATUS_OK );
+    }
+
+    return iStatus;
 }
