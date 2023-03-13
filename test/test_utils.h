@@ -50,10 +50,11 @@
  *
  * @param pucBuffer Buffer to display
  * @param usLength Number of bytes in buffer
+ * @param pcBufferName Optional name of the buffer
  *
  * @return None
  */
-void vDisplayBuffer( uint8_t *pucBuffer, uint16_t usLength );
+void vDisplayBuffer( uint8_t *pucBuffer, uint16_t usLength, const char* pcBufferName );
 
 /**
  * @brief Read a byte from stdin

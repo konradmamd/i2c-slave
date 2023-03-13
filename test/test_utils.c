@@ -58,13 +58,21 @@ uint8_t ucInputByte( const char *sPrompt, bool bHex, bool bNewLine )
 /**
  * @brief Displays data buffer
  */
-void vDisplayBuffer( uint8_t *pucBuffer, uint16_t usLength )
+void vDisplayBuffer( uint8_t *pucBuffer, uint16_t usLength, const char* pcBufferName )
 {
     if( NULL != pucBuffer )
     {
         int i = 0;
 
-        SMBUS_PRINTF( "Data:\r\n" );
+        if( NULL != pcBufferName )
+        {
+            SMBUS_PRINTF( "Data '%s':\r\n", pcBufferName );
+        }
+        else
+        {
+            SMBUS_PRINTF( "Data:\r\n" );
+        }
+        
         for( i = 0; i < usLength; i++ )
         {
             if( 0 == ( i % BUFFER_PRINT_WIDTH ) )

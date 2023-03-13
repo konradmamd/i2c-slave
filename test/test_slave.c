@@ -380,7 +380,7 @@ static void vGetSlaveData( void )
         SMBUS_PRINTF( "Reading value from driver\r\n" );
         iRet = ioctl( iDevice, I2C_SLAVE_GET_DATA, ( uint8_t* )&xRxData.wr_data );
         SMBUS_PRINTF( "IOCTL complete - got %d byte(s) with return value %d\r\n", xRxData.wr_data.data_size, iRet );
-        vDisplayBuffer( &xRxData.wr_data.data[ 0 ], xRxData.wr_data.data_size );
+        vDisplayBuffer( &xRxData.wr_data.data[ 0 ], xRxData.wr_data.data_size, NULL );
     }
     else
     {
@@ -405,7 +405,7 @@ static void vGetSlaveEvent( void )
             xRxData.wr_data.data_size, iRet
         );
 
-        vDisplayBuffer( &xRxData.wr_data.data[ 0 ], xRxData.wr_data.data_size );
+        vDisplayBuffer( &xRxData.wr_data.data[ 0 ], xRxData.wr_data.data_size, NULL );
     }
     else
     {
