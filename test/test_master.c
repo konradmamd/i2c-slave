@@ -45,20 +45,22 @@ typedef enum USER_CMD
 {
     USER_CMD_QUIT         = 0,
 
-    USER_CMD_SEND_BYTE    = SMBUS_PROTOCOL_SEND_BYTE,
-    USER_CMD_RECEIVE_BYTE = SMBUS_PROTOCOL_RECEIVE_BYTE,
-    USER_CMD_WRITE_BYTE   = SMBUS_PROTOCOL_WRITE_BYTE,
-    USER_CMD_READ_BYTE    = SMBUS_PROTOCOL_READ_BYTE,
-    USER_CMD_READ_WORD    = SMBUS_PROTOCOL_READ_WORD,
-    USER_CMD_WRITE_WORD   = SMBUS_PROTOCOL_WRITE_WORD,
-    USER_CMD_WRITE_32     = SMBUS_PROTOCOL_WRITE_32,
-    USER_CMD_READ_32      = SMBUS_PROTOCOL_READ_32,
-    USER_CMD_WRITE_64     = SMBUS_PROTOCOL_WRITE_64,
-    USER_CMD_READ_64      = SMBUS_PROTOCOL_READ_64,
-    USER_CMD_BLOCK_WRITE  = SMBUS_PROTOCOL_BLOCK_WRITE,
-    USER_CMD_BLOCK_READ   = SMBUS_PROTOCOL_BLOCK_READ,
+    USER_CMD_SEND_BYTE          = SMBUS_PROTOCOL_SEND_BYTE,
+    USER_CMD_RECEIVE_BYTE       = SMBUS_PROTOCOL_RECEIVE_BYTE,
+    USER_CMD_WRITE_BYTE         = SMBUS_PROTOCOL_WRITE_BYTE,
+    USER_CMD_READ_BYTE          = SMBUS_PROTOCOL_READ_BYTE,
+    USER_CMD_READ_WORD          = SMBUS_PROTOCOL_READ_WORD,
+    USER_CMD_WRITE_WORD         = SMBUS_PROTOCOL_WRITE_WORD,
+    USER_CMD_WRITE_32           = SMBUS_PROTOCOL_WRITE_32,
+    USER_CMD_READ_32            = SMBUS_PROTOCOL_READ_32,
+    USER_CMD_WRITE_64           = SMBUS_PROTOCOL_WRITE_64,
+    USER_CMD_READ_64            = SMBUS_PROTOCOL_READ_64,
+    USER_CMD_BLOCK_WRITE        = SMBUS_PROTOCOL_BLOCK_WRITE,
+    USER_CMD_BLOCK_READ         = SMBUS_PROTOCOL_BLOCK_READ,
+    USER_CMD_PROCESS_CALL       = SMBUS_PROTOCOL_PROCESS_CALL,
+    USER_CMD_BLOCK_PROCESS_CALL = SMBUS_PROTOCOL_BLOCK_WRITE_BLOCK_READ_PROCESS_CALL,
 
-    USER_CMD_HELP         = ( uint8_t )( -1 )
+    USER_CMD_HELP               = ( uint8_t )( -1 )
 
 } USER_CMD;
 
@@ -115,6 +117,8 @@ static void vDisplayCommands( void )
     PRINT_ENUM( USER_CMD_WRITE_64 );
     PRINT_ENUM( USER_CMD_BLOCK_READ );
     PRINT_ENUM( USER_CMD_BLOCK_WRITE );
+    PRINT_ENUM( USER_CMD_PROCESS_CALL );
+    PRINT_ENUM( USER_CMD_BLOCK_PROCESS_CALL );
     NEW_LINE;
 }
 
@@ -232,6 +236,21 @@ static void vDoSMBusTransaction( SMBUS_PROTOCOL_COMMANDS eProtocol )
                 break;
             }
 
+            case SMBUS_PROTOCOL_PROCESS_CALL:
+            {
+                iTransactionType = READ | WRITE;
+                usWrLen = 3;
+                usRdLen = 2;
+                break;
+            }
+
+            case SMBUS_PROTOCOL_BLOCK_WRITE_BLOCK_READ_PROCESS_CALL:
+            {
+                iTransactionType = READ | WRITE | SIZED_RDWR;
+                usWrLen = 2 + ucInputByte( "Enter block length", false, false );  /* cmd + len */
+                break;
+            }
+
             default:
             {
                 break;
@@ -307,9 +326,11 @@ static void vDoSMBusTransaction( SMBUS_PROTOCOL_COMMANDS eProtocol )
         {
             SMBUS_PRINTF( "OK. Data sent!\r\n" );
             vDisplayBuffer( pucWrBuffer, usWrLen, "pucWrBuffer" );
+
+            /* When displaying the read buffer, take into account the number of extra bytes (len, pec, etc.) */
             vDisplayBuffer(
                 pucRdBuffer,
-                ( ( iTransactionType & SIZED_RDWR ) ? ( pucRdBuffer[ 0 ] ) : ( usRdLen ) ),
+                ( ( iTransactionType & SIZED_RDWR ) ? ( pucRdBuffer[ 0 ] + 1 ) : ( usRdLen ) ),
                 "pucRdBuffer"
             );
         }
@@ -378,6 +399,8 @@ int main()
                 case USER_CMD_WRITE_64:
                 case SMBUS_PROTOCOL_BLOCK_WRITE:
                 case SMBUS_PROTOCOL_BLOCK_READ:
+                case SMBUS_PROTOCOL_PROCESS_CALL:
+                case SMBUS_PROTOCOL_BLOCK_WRITE_BLOCK_READ_PROCESS_CALL:
                 {
                     vDoSMBusTransaction( ( SMBUS_PROTOCOL_COMMANDS )ucInput );
                     break;

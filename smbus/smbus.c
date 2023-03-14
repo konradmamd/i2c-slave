@@ -584,22 +584,35 @@ int smbus_block_read( uint8_t ucAddr, uint8_t ucCmd, uint8_t* pucData, uint8_t* 
  */
 int smbus_process_call( uint8_t ucAddr, uint8_t ucCmd, uint16_t usWrData, uint16_t* pusRdData, bool bPec )
 {
-    // int iStatus = SMBUS_STATUS_ERROR;
+    int iStatus = SMBUS_STATUS_ERROR;
 
-    // if( ( LINUX_STATUS_INVALID_HANDLE != iBusHandle ) && 
-    //     ( NULL != pusRdData ) &&
-    //     ( SMBUS_STATUS_OK == iClaimSlave( ucAddr, bPec ) ) )
-    // {
-    //     int iTempWord = i2c_smbus_process_call( iBusHandle, ucCmd, usWrData );
+    if( ( LINUX_STATUS_INVALID_HANDLE != iBusHandle ) &&
+        ( NULL != pusRdData ) )
+    {
+        uint16_t usWrIndex = 0;
+        uint16_t usLeWrData = htole16( usWrData );
 
-    //     if( LINUX_STATUS_RW_ERROR != iTempWord )
-    //     {
-    //         *pusRdData = ( uint16_t )iTempWord;
-    //         iStatus = SMBUS_STATUS_OK;
-    //     }
-    // }
+        xConSMBusData.usAddr                     = ( uint8_t )ucAddr;
+        xConSMBusData.bPec                       = bPec;
+        xConSMBusData.pucWrBuffer[ usWrIndex++ ] = ucCmd;
+        xConSMBusData.pucWrBuffer[ usWrIndex++ ] = ( uint8_t )( usLeWrData );
+        xConSMBusData.pucWrBuffer[ usWrIndex++ ] = ( uint8_t )( usLeWrData >> 8);
+        xConSMBusData.usWrLen                    = usWrIndex;
+        xConSMBusData.usRdLen                    = DATA_SIZE_WORD;
 
-    // return iStatus;
+        memset( xConSMBusData.pucRdBuffer, 0xFF, SMBUS_MAX_BUFFER );
+
+        if( SMBUS_STATUS_OK == iDoTransaction( TRANSACTION_TYPE_READ | TRANSACTION_TYPE_WRITE ) )
+        {
+            uint16_t usLeRdData = ( ( uint16_t )( xConSMBusData.pucRdBuffer[ 1 ] << 8 ) );
+            usLeRdData         |=   ( uint16_t )( xConSMBusData.pucRdBuffer[ 0 ] );
+
+            *pusRdData = le16toh( usLeRdData );
+            iStatus = SMBUS_STATUS_OK;
+        }
+    }
+
+    return iStatus;
 }
 
 /**
@@ -610,28 +623,35 @@ int smbus_block_process_call( uint8_t ucAddr, uint8_t ucCmd,
                               uint8_t* pucRdData, uint8_t* pucRdLen,
                               bool bPec )
 {
-    // int iStatus = SMBUS_STATUS_ERROR;
+    int iStatus = SMBUS_STATUS_ERROR;
 
-    // if( ( LINUX_STATUS_INVALID_HANDLE != iBusHandle ) && 
-    //     ( NULL != pucWrData ) && ( NULL != pucRdData ) &&
-    //     ( NULL != pucRdLen ) && ( SMBUS_MAX_DATA >= ucWrLen ) &&
-    //     ( SMBUS_STATUS_OK == iClaimSlave( ucAddr, bPec ) ) )
-    // {
-    //     /* Create a temp buffer so we don't override `pucWrData`. */
-    //     uint8_t pucTempBuffer[ SMBUS_MAX_BUFFER ] = { 0 };
-    //     memcpy( pucTempBuffer, pucWrData, ucWrLen );
+    if( ( LINUX_STATUS_INVALID_HANDLE != iBusHandle ) &&
+        ( NULL != pucWrData ) && ( NULL != pucRdData ) &&
+        ( NULL != pucRdLen ) && ( SMBUS_MAX_DATA >= ucWrLen ) )
+    {
+        uint16_t usWrIndex = 0;
 
-    //     int iBytesRead = i2c_smbus_block_process_call( iBusHandle, ucCmd, ucWrLen, pucTempBuffer );
+        xConSMBusData.usAddr                     = ( uint8_t )ucAddr;
+        xConSMBusData.bPec                       = bPec;
+        xConSMBusData.pucWrBuffer[ usWrIndex++ ] = ucCmd;
+        xConSMBusData.pucWrBuffer[ usWrIndex++ ] = ucWrLen;
+        xConSMBusData.usWrLen                    = usWrIndex + ucWrLen;
+        xConSMBusData.usRdLen                    = SMBUS_MAX_DATA + 1;  /* will do a sized read */
 
-    //     if( LINUX_STATUS_RW_ERROR != iBytesRead )
-    //     {
-    //         *pucRdLen = ( uint8_t )iBytesRead;
-    //         memcpy( pucRdData, pucTempBuffer, *pucRdLen );
-    //         iStatus = SMBUS_STATUS_OK;
-    //     }
-    // }
+        memcpy( &xConSMBusData.pucWrBuffer[ usWrIndex ], pucWrData, ucWrLen );
+        memset( xConSMBusData.pucRdBuffer, 0xFF, SMBUS_MAX_BUFFER );
 
-    // return iStatus;
+        if( SMBUS_STATUS_OK == iDoTransaction(
+                TRANSACTION_TYPE_READ | TRANSACTION_TYPE_WRITE | TRANSACTION_TYPE_SIZED ) )
+        {
+            *pucRdLen = xConSMBusData.pucRdBuffer[ BLOCK_SIZE_OFFSET ];
+            memcpy( pucRdData, &xConSMBusData.pucRdBuffer[ BLOCK_DATA_OFFSET ], *pucRdLen );
+
+            iStatus = SMBUS_STATUS_OK;
+        }
+    }
+
+    return iStatus;
 }
 
 /*****************************************************************************/
