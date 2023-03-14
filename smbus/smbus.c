@@ -48,6 +48,9 @@
 #define UNINIT_ADDR               ( 0x00 )
 #define SMBUS_FILENAME_LEN        ( 30   )
 
+#define BLOCK_SIZE_OFFSET         ( 0    )
+#define BLOCK_DATA_OFFSET         ( 1    )
+
 /*
  * See http://www.merkles.com/Using_I2C/5_struct_i2c_msg.html 
  * See also linux/i2c.h and linux/i2c-dev.h
@@ -81,8 +84,9 @@ typedef enum LINUX_STATUS
  */
 typedef enum TRANSACTION_TYPE
 {
-    TRANSACTION_TYPE_READ  = 0x01,
-    TRANSACTION_TYPE_WRITE = 0x02
+    TRANSACTION_TYPE_READ  = 0x01,  /* Perform a read transaction (send [addr|rd]) */
+    TRANSACTION_TYPE_WRITE = 0x02,  /* Perform a write transaction (send [addr|wr]) */
+    TRANSACTION_TYPE_SIZED = 0x04   /* First byte in buffer is data length - only has an effect on reads */
     
 } TRANSACTION_TYPE;
 
@@ -514,19 +518,28 @@ int smbus_read_64( uint8_t ucAddr, uint8_t ucCmd, uint64_t* pullData, bool bPec 
  */
 int smbus_block_write( uint8_t ucAddr, uint8_t ucCmd, uint8_t* pucData, uint8_t ucLength, bool bPec )
 {
-    // int iStatus = SMBUS_STATUS_ERROR;
+    int iStatus = SMBUS_STATUS_ERROR;
 
-    // if( ( LINUX_STATUS_INVALID_HANDLE != iBusHandle ) &&
-    //     ( NULL != pucData ) && ( SMBUS_MAX_DATA >= ucLength ) &&
-    //     ( SMBUS_STATUS_OK == iClaimSlave( ucAddr, bPec ) ) )
-    // {
-    //     if( LINUX_STATUS_RW_OK == i2c_smbus_write_block_data( iBusHandle, ucCmd, ucLength, pucData ) )
-    //     {
-    //         iStatus = SMBUS_STATUS_OK;
-    //     }
-    // }
+    if( ( LINUX_STATUS_INVALID_HANDLE != iBusHandle ) &&
+        ( NULL != pucData ) &&
+        ( SMBUS_MAX_DATA >= ucLength ) &&
+        ( 0 < ucLength ) )
+    {
+        uint16_t usWrIndex = 0;
 
-    // return iStatus;
+        xConSMBusData.usAddr                     = ( uint8_t )ucAddr;
+        xConSMBusData.bPec                       = bPec;
+        xConSMBusData.pucWrBuffer[ usWrIndex++ ] = ucCmd;
+        xConSMBusData.pucWrBuffer[ usWrIndex++ ] = ucLength;
+        xConSMBusData.usWrLen                    = usWrIndex + ucLength;
+        xConSMBusData.usRdLen                    = DATA_SIZE_EMPTY;
+
+        memcpy( &xConSMBusData.pucWrBuffer[ usWrIndex ], pucData, ucLength );
+
+        iStatus = iDoTransaction( TRANSACTION_TYPE_WRITE ); 
+    }
+
+    return iStatus;
 }
 
 /**
@@ -534,26 +547,36 @@ int smbus_block_write( uint8_t ucAddr, uint8_t ucCmd, uint8_t* pucData, uint8_t 
  */
 int smbus_block_read( uint8_t ucAddr, uint8_t ucCmd, uint8_t* pucData, uint8_t* pucLength, bool bPec )
 {
-    // int iStatus = SMBUS_STATUS_ERROR;
+    int iStatus = SMBUS_STATUS_ERROR;
 
-    // if( ( LINUX_STATUS_INVALID_HANDLE != iBusHandle ) && 
-    //     ( NULL != pucData ) && ( NULL != pucLength ) &&
-    //     ( SMBUS_STATUS_OK == iClaimSlave( ucAddr, bPec ) ) )
-    // {
-    //     int iBytesRead = i2c_smbus_read_block_data( iBusHandle, ucCmd, pucData );
+    if( ( LINUX_STATUS_INVALID_HANDLE != iBusHandle ) &&
+        ( NULL != pucData ) )
+    {
+        uint16_t usWrIndex = 0;
 
-    //     if( LINUX_STATUS_RW_ERROR != iBytesRead )
-    //     {
-    //         *pucLength = ( uint8_t )iBytesRead;
-    //         iStatus = SMBUS_STATUS_OK;
-    //     }
-    //     else
-    //     {
-    //         *pucLength = 0;
-    //     }
-    // }
+        xConSMBusData.usAddr                     = ( uint8_t )ucAddr;
+        xConSMBusData.bPec                       = bPec;
+        xConSMBusData.pucWrBuffer[ usWrIndex++ ] = ucCmd;
+        xConSMBusData.usRdLen                    = SMBUS_MAX_DATA + 1;  /* will be doing a sized read */
+        xConSMBusData.usWrLen                    = usWrIndex;
 
-    // return iStatus;
+        memset( xConSMBusData.pucRdBuffer, 0xFF, SMBUS_MAX_BUFFER );
+
+        if( SMBUS_STATUS_OK == iDoTransaction(
+                TRANSACTION_TYPE_READ | TRANSACTION_TYPE_WRITE | TRANSACTION_TYPE_SIZED ) )
+        {
+            *pucLength = xConSMBusData.pucRdBuffer[ BLOCK_SIZE_OFFSET ];
+            memcpy( pucData, &xConSMBusData.pucRdBuffer[ BLOCK_DATA_OFFSET ], *pucLength );
+
+            iStatus = SMBUS_STATUS_OK;
+        }
+        else
+        {
+            *pucLength = 0;
+        }
+    }
+
+    return iStatus;
 }
 
 /**
@@ -679,10 +702,43 @@ static int iDoTransaction( TRANSACTION_TYPE eTransactionType )
 
         if( eTransactionType & TRANSACTION_TYPE_READ )
         {
-            xMessages[ ucNumMessages ].addr = xConSMBusData.usAddr;
             xMessages[ ucNumMessages ].flags = I2C_M_RD;
-            xMessages[ ucNumMessages ].len = xConSMBusData.usRdLen;
+            xMessages[ ucNumMessages ].addr = xConSMBusData.usAddr;
             xMessages[ ucNumMessages ].buf = &xConSMBusData.pucRdBuffer[ 0 ];
+
+            if( eTransactionType & TRANSACTION_TYPE_SIZED )
+            {
+                /* 
+                 * The following has been copied directly from `i2c-dev.c`:
+                 * -------------------------------------------------------------
+                 * If the message length is received from the slave (similar
+                 * to SMBus block read), we must ensure that the buffer will
+                 * be large enough to cope with a message length of
+                 * I2C_SMBUS_BLOCK_MAX as this is the maximum underlying bus
+                 * drivers allow. The first byte in the buffer must be
+                 * pre-filled with the number of extra bytes, which must be
+                 * at least one to hold the message length, but can be
+                 * greater (for example to account for a checksum byte at
+                 * the end of the message.)
+                 * -------------------------------------------------------------
+                 * For reference, the code in `i2c-dev.c` performs the following
+                 * check when the `I2C_M_RECV_LEN` flag is set -
+                 * if true, return -EINVAL:
+                 *      !( msgs[ i ].flags & I2C_M_RD )      ||
+                 *      msgs[ i ].len < 1                    ||
+                 *      msgs[ i ].buf[ 0 ] < 1               ||
+                 *      msgs[ i ].len < msgs[ i ].buf[ 0 ]   \
+                 *                      + I2C_SMBUS_BLOCK_MAX
+                 */
+                xMessages[ ucNumMessages ].buf[ BLOCK_SIZE_OFFSET ] = 1;
+                xMessages[ ucNumMessages ].len = SMBUS_MAX_BUFFER - 1;
+                xMessages[ ucNumMessages ].flags |= I2C_M_RECV_LEN;
+            }
+            else
+            {
+                xMessages[ ucNumMessages ].len = xConSMBusData.usRdLen;
+            }
+
             ucNumMessages++;
         }
 

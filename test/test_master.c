@@ -4,6 +4,8 @@
 #include <stdint.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <errno.h>
+#include <string.h>
 #include <sys/ioctl.h>
 #include <linux/i2c.h>
 #include <linux/i2c-dev.h>
@@ -24,6 +26,12 @@
 
 #define READ                  ( 1U << 0 )
 #define WRITE                 ( 1U << 1 )
+
+/* 
+ * This should only be used for reads but we also use it for writes
+ * to indicate that a length byte should be appended to the wr buffer.
+ */
+#define SIZED_RDWR            ( 1U << 2 )
 
 /*****************************************************************************/
 /* Enums                                                                     */
@@ -47,6 +55,8 @@ typedef enum USER_CMD
     USER_CMD_READ_32      = SMBUS_PROTOCOL_READ_32,
     USER_CMD_WRITE_64     = SMBUS_PROTOCOL_WRITE_64,
     USER_CMD_READ_64      = SMBUS_PROTOCOL_READ_64,
+    USER_CMD_BLOCK_WRITE  = SMBUS_PROTOCOL_BLOCK_WRITE,
+    USER_CMD_BLOCK_READ   = SMBUS_PROTOCOL_BLOCK_READ,
 
     USER_CMD_HELP         = ( uint8_t )( -1 )
 
@@ -103,6 +113,8 @@ static void vDisplayCommands( void )
     PRINT_ENUM( USER_CMD_WRITE_32 );
     PRINT_ENUM( USER_CMD_READ_64 );
     PRINT_ENUM( USER_CMD_WRITE_64 );
+    PRINT_ENUM( USER_CMD_BLOCK_READ );
+    PRINT_ENUM( USER_CMD_BLOCK_WRITE );
     NEW_LINE;
 }
 
@@ -206,6 +218,20 @@ static void vDoSMBusTransaction( SMBUS_PROTOCOL_COMMANDS eProtocol )
                 break;
             }
 
+            case SMBUS_PROTOCOL_BLOCK_WRITE:
+            {
+                iTransactionType = WRITE | SIZED_RDWR;
+                usWrLen = 2 + ucInputByte( "Enter block length", false, false );  /* cmd + len */
+                break;
+            }
+
+            case SMBUS_PROTOCOL_BLOCK_READ:
+            {
+                iTransactionType = WRITE | READ | SIZED_RDWR;
+                usWrLen = 1;
+                break;
+            }
+
             default:
             {
                 break;
@@ -215,14 +241,23 @@ static void vDoSMBusTransaction( SMBUS_PROTOCOL_COMMANDS eProtocol )
         /* Set wr data. */
         uint16_t usWrIndex = 0;
 
-        if( ( bSendCmd ) && ( 0 < usWrLen ) )
+        /* Command byte. */
+        if( ( bSendCmd ) && ( usWrIndex < usWrLen ) )
         {
             pucWrBuffer[ usWrIndex++ ] = ( uint8_t )eProtocol;
         }
 
+        /* Length byte. */
+        if( ( iTransactionType & SIZED_RDWR ) && ( usWrIndex < usWrLen ) )
+        {
+            pucWrBuffer[ usWrIndex++ ] = usWrLen - ( ( bSendCmd ) ? ( 2 ) : ( 1 ) );
+        }
+
+        /* Data bytes. */
+        uint16_t usDataOffset = usWrIndex;
         for( usWrIndex; usWrIndex < usWrLen; usWrIndex++ )
         {
-            pucWrBuffer[ usWrIndex ] = pucWrData[ usWrIndex ];
+            pucWrBuffer[ usWrIndex ] = pucWrData[ usWrIndex - usDataOffset ];
         }
 
         if( iTransactionType & WRITE )
@@ -237,9 +272,20 @@ static void vDoSMBusTransaction( SMBUS_PROTOCOL_COMMANDS eProtocol )
         if( iTransactionType & READ )
         {
             xMessages[ ucNumMessages ].addr = usSlaveAddr;
-            xMessages[ ucNumMessages ].flags = I2C_M_RD;
-            xMessages[ ucNumMessages ].len = usRdLen;
             xMessages[ ucNumMessages ].buf = &pucRdBuffer[ 0 ];
+            xMessages[ ucNumMessages ].flags = I2C_M_RD;
+
+            if( iTransactionType & SIZED_RDWR )
+            {
+                xMessages[ ucNumMessages ].buf[ 0 ] = 1;
+                xMessages[ ucNumMessages ].len = SMBUS_MAX_BUFFER - 1;
+                xMessages[ ucNumMessages ].flags |= I2C_M_RECV_LEN;
+            }
+            else
+            {
+                xMessages[ ucNumMessages ].len = usRdLen;
+            }
+
             ucNumMessages++;
         }
 
@@ -255,20 +301,26 @@ static void vDoSMBusTransaction( SMBUS_PROTOCOL_COMMANDS eProtocol )
             ( uint8_t )eProtocol, usWrLen, usRdLen, usSlaveAddr
         );
 
+        errno = 0;
+
         if( LINUX_ERROR != ioctl( iDevice, I2C_RDWR, &xData ) )
         {
             SMBUS_PRINTF( "OK. Data sent!\r\n" );
             vDisplayBuffer( pucWrBuffer, usWrLen, "pucWrBuffer" );
-            vDisplayBuffer( pucRdBuffer, usRdLen, "pucRdBuffer" );
+            vDisplayBuffer(
+                pucRdBuffer,
+                ( ( iTransactionType & SIZED_RDWR ) ? ( pucRdBuffer[ 0 ] ) : ( usRdLen ) ),
+                "pucRdBuffer"
+            );
         }
         else
         {
-            SMBUS_PRINTF_ERR( "ERROR. Could not send data!\r\n" );
+            SMBUS_PRINTF_ERR( "Could not send data (%d): %s\r\n", errno, strerror( errno ) );
         }
     }
     else
     {
-        SMBUS_PRINTF_ERR( "Error. Invalid I2C device.\r\n" );
+        SMBUS_PRINTF_ERR( "Invalid I2C device.\r\n" );
     }
 }
 
@@ -324,6 +376,8 @@ int main()
                 case USER_CMD_WRITE_32:
                 case USER_CMD_READ_64:
                 case USER_CMD_WRITE_64:
+                case SMBUS_PROTOCOL_BLOCK_WRITE:
+                case SMBUS_PROTOCOL_BLOCK_READ:
                 {
                     vDoSMBusTransaction( ( SMBUS_PROTOCOL_COMMANDS )ucInput );
                     break;

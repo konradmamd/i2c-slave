@@ -31,11 +31,15 @@ elif [ "$1" == "rm" ] && [ $# -eq 2 ]; then
     echo "Removing slave at address ${slave}"
     echo "0x10${slave}" > ${BUS}/delete_device
 elif [ "$1" == "dd-enable" ] && [ $# -eq 1 ]; then
-    echo "Enabling debug for i2c-aspeed.c"
+    echo "Enabling debug for i2c-aspeed.c i2c-dev.c i2c-core-base.c"
     echo "file i2c-aspeed.c line 0- +p" > /proc/dynamic_debug/control
+    echo "file i2c-dev.c line 0- +p" > /proc/dynamic_debug/control
+    echo "file i2c-core-base.c line 0- +p" > /proc/dynamic_debug/control
 elif [ "$1" == "dd-disable" ] && [ $# -eq 1 ]; then
-    echo "Disabling debug for i2c-aspeed.c"
+    echo "Disabling debug for i2c-aspeed.c i2c-dev.c i2c-core-base.c"
     echo "file i2c-aspeed.c line 0- -p" > /proc/dynamic_debug/control
+    echo "file i2c-dev.c line 0- -p" > /proc/dynamic_debug/control
+    echo "file i2c-core-base.c line 0- -p" > /proc/dynamic_debug/control
 else
     echo "Incorrect arguments"
     exit
