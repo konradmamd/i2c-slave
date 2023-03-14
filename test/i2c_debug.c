@@ -36,9 +36,13 @@ typedef enum I2C_DEBUG_ARGC
     I2C_DEBUG_WB_ARGC_MIN           = 4,  /* write byte */
     I2C_DEBUG_WW_ARGC_MIN           = 4,  /* write word */
     I2C_DEBUG_WBLOCK_ARGC_MIN       = 5,  /* write block */
+    I2C_DEBUG_W32_ARGC_MIN          = 4,  /* write 32 */
+    I2C_DEBUG_W64_ARGC_MIN          = 4,  /* write 64 */
     I2C_DEBUG_RB_ARGC_MIN           = 3,  /* read byte */
     I2C_DEBUG_RW_ARGC_MIN           = 3,  /* read word */
     I2C_DEBUG_RBLOCK_ARGC_MIN       = 3,  /* read block */
+    I2C_DEBUG_R32_ARGC_MIN          = 3,  /* read 32 */
+    I2C_DEBUG_R64_ARGC_MIN          = 3,  /* read 64 */
     I2C_DEBUG_PW_ARGC_MIN           = 4,  /* process call */
     I2C_DEBUG_PB_ARGC_MIN           = 5,  /* block process call */
 
@@ -63,11 +67,21 @@ typedef enum I2C_DEBUG_ARGV
     I2C_DEBUG_ARGV_WBLOCK_CMD    = 3,  /* write block : command code */
     I2C_DEBUG_ARGV_WBLOCK_SIZE   = 4,  /* write block : block size */
 
+    I2C_DEBUG_ARGV_W32_CMD       = 3,  /* write 32: command code */
+    I2C_DEBUG_ARGV_W32_DATA      = 4,  /* write 32: data to write */
+
+    I2C_DEBUG_ARGV_W64_CMD       = 3,  /* write 64: command code */
+    I2C_DEBUG_ARGV_W64_DATA      = 4,  /* write 64: data to write */
+
     I2C_DEBUG_ARGV_RB_CMD        = 3,  /* read byte : command code */
 
     I2C_DEBUG_ARGV_RW_CMD        = 3,  /* read word : command code */
 
     I2C_DEBUG_ARGV_RBLOCK_CMD    = 3,  /* read block : command code */
+
+    I2C_DEBUG_ARGV_R32_CMD       = 3,  /* read 32: command code */
+
+    I2C_DEBUG_ARGV_R64_CMD       = 3,  /* read 64: command code */
 
     I2C_DEBUG_ARGV_PW_CMD        = 3,  /* proc call : command code */
     I2C_DEBUG_ARGV_PW_WORD       = 4,  /* proc call : word to write */
@@ -97,21 +111,24 @@ typedef enum I2C_DEBUG_FLAGS
  */
 int main( int argc, char* argv[] )
 {
-    /* TODO: Test write word, write block, write quick, process call (word and block). */
     if( I2C_DEBUG_ARGC_MIN > argc )
     {
         fprintf( 
             stderr, 
             "Usage: %s <addr>@<bus>[:pR] [cmd] [args...]\r\n\r\n"
             "Available Commands:\r\n"
-            "  wb: write byte <command> <data>\r\n"
-            "  ww: write word <command> <data>\r\n"
-            "  wB: write block <command> <len> [<byte1> <byte2>...]\r\n"
-            "  rb: read byte <command>\r\n"
-            "  rw: read word <command>\r\n"
-            "  rB: read block <command> <len>\r\n"
-            "  pw: process call <command> <data>\r\n"
-            "  pB: block process call <command> <len> [<byte1> <byte2>...]\r\n",
+            "   wb: write byte <command> <data>\r\n"
+            "   ww: write word <command> <data>\r\n"
+            "   wB: write block <command> <len> [<byte1> <byte2>...]\r\n"
+            "  w32: write 32 <command> <data>\r\n"
+            "  w64: write 64 <command> <data>\r\n"
+            "   rb: read byte <command>\r\n"
+            "   rw: read word <command>\r\n"
+            "   rB: read block <command> <len>\r\n"
+            "  r32: read 32 <command>\r\n"
+            "  r64: read 64 <command>\r\n"
+            "   pw: process call <command> <data>\r\n"
+            "   pB: block process call <command> <len> [<byte1> <byte2>...]\r\n",
             argv[0]
         );
 
@@ -248,6 +265,48 @@ int main( int argc, char* argv[] )
                 fprintf( stderr, "ERROR: Specify a command, block size, and data bytes.\r\n" );
             }
         }
+        else if( 0 == strcmp( "w32", pcUserInput ) )
+        {
+            if( I2C_DEBUG_W32_ARGC_MIN < argc )  /* write 32 <command> <data> */
+            {
+                uint8_t ucCommand = ( uint8_t )strtol( argv[ I2C_DEBUG_ARGV_W32_CMD ], NULL, 0 );
+                uint32_t ulData = ( uint32_t )strtol( argv[ I2C_DEBUG_ARGV_W32_DATA ], NULL, 0 );
+
+                if( SMBUS_STATUS_OK == smbus_write_32( ucAddr, ucCommand, ulData, bPecEnabled ) )
+                {
+                    printf( "Wrote data 0x%08X with command 0x%02X\r\n", ulData, ucCommand );
+                }
+                else
+                {
+                    printf( "Could not write data.\r\n" );
+                }
+            }
+            else
+            {
+                fprintf( stderr, "ERROR: Specify a command and data.\r\n" );
+            }
+        }
+        else if( 0 == strcmp ( "w64", pcUserInput ) )
+        {
+            if( I2C_DEBUG_W64_ARGC_MIN < argc )  /* write 64 <command> <data> */
+            {
+                uint8_t ucCommand = ( uint8_t )strtol( argv[ I2C_DEBUG_ARGV_W64_CMD ], NULL, 0 );
+                uint64_t ullData = ( uint64_t )strtol( argv[ I2C_DEBUG_ARGV_W64_DATA ], NULL, 0 );
+
+                if( SMBUS_STATUS_OK == smbus_write_64( ucAddr, ucCommand, ullData, bPecEnabled ) )
+                {
+                    printf( "Wrote data 0x%016llX with command 0x%02X\r\n", ullData, ucCommand );
+                }
+                else
+                {
+                    printf( "Could not write data.\r\n" );
+                }
+            }
+            else
+            {
+                fprintf( stderr, "ERROR: Specify a command and data.\r\n" );
+            }
+        }
         else if( 0 == strcmp( "rb", pcUserInput ) )
         {
             if( I2C_DEBUG_RB_ARGC_MIN < argc )  /* read byte <command> */
@@ -318,6 +377,48 @@ int main( int argc, char* argv[] )
             else 
             {
                 fprintf( stderr, "ERROR: Specify a command and length to read.\r\n" );
+            }
+        }
+        else if( 0 == strcmp( "r32", pcUserInput ) )
+        {
+            if( I2C_DEBUG_R32_ARGC_MIN < argc )  /* read 32 <command> */
+            {
+                uint32_t ulData = 0;
+                uint8_t ucCommand = ( uint8_t )strtol( argv[ I2C_DEBUG_ARGV_R32_CMD ], NULL, 0 );
+
+                if( SMBUS_STATUS_OK == smbus_read_32( ucAddr, ucCommand, &ulData, bPecEnabled ) )
+                {
+                    printf( "Read data 0x%08X with command 0x%02X\r\n", ulData, ucCommand );
+                }
+                else
+                {
+                    printf( "Could not read data.\r\n" );
+                }
+            }
+            else
+            {
+                fprintf( stderr, "ERROR: Specify a command.\r\n" );
+            }
+        }
+        else if( 0 == strcmp ( "r64", pcUserInput ) )
+        {
+            if( I2C_DEBUG_R64_ARGC_MIN < argc )  /* read 64 <command> */
+            {
+                uint64_t ullData = 0;
+                uint8_t ucCommand = ( uint8_t )strtol( argv[ I2C_DEBUG_ARGV_R64_CMD ], NULL, 0 );
+
+                if( SMBUS_STATUS_OK == smbus_read_64( ucAddr, ucCommand, &ullData, bPecEnabled ) )
+                {
+                    printf( "Read data 0x%016llX with command 0x%02X\r\n", ullData, ucCommand );
+                }
+                else
+                {
+                    printf( "Could not read data.\r\n" );
+                }
+            }
+            else
+            {
+                fprintf( stderr, "ERROR: Specify a command.\r\n" );
             }
         }
         else if( 0 == strcmp( "pw", pcUserInput ) ) 
