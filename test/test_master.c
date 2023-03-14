@@ -43,7 +43,7 @@
  */
 typedef enum USER_CMD
 {
-    USER_CMD_QUIT         = 0,
+    USER_CMD_QUIT               = 0,
 
     USER_CMD_SEND_BYTE          = SMBUS_PROTOCOL_SEND_BYTE,
     USER_CMD_RECEIVE_BYTE       = SMBUS_PROTOCOL_RECEIVE_BYTE,
